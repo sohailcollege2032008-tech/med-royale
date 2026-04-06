@@ -3,54 +3,91 @@ import { supabase } from '../lib/supabase'
 import { useAuthStore } from '../stores/authStore'
 
 export function useAuth() {
-  const { session, profile, setAuth, setLoading, clearAuth } = useAuthStore()
+  const session = useAuthStore(state => state.session)
+  const profile = useAuthStore(state => state.profile)
+  const loading = useAuthStore(state => state.loading)
 
   useEffect(() => {
-    let mounted = true;
-
     async function getProfile(userId) {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .single()
-      
-      if (error) {
-        console.error('Error fetching profile:', error)
-        return null;
-      }
-      return data;
-    }
-
-    async function initAuth() {
-      setLoading(true)
-      const { data: { session } } = await supabase.auth.getSession()
-      
-      if (session && mounted) {
-        const profile = await getProfile(session.user.id)
-        setAuth(session, profile)
-      } else if (mounted) {
-        clearAuth()
+      try {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', userId)
+          .single()
+        if (error) {
+          // PGRST116 = no rows found (profile not created yet), not a real error
+          if (error.code !== 'PGRST116') {
+            console.error('[Auth] Profile fetch error:', error)
+          }
+          return null
+        }
+        return data
+      } catch (err) {
+        console.error('[Auth] Profile fetch exception:', err)
+        return null
       }
     }
 
-    initAuth()
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (!mounted) return;
-      if (session) {
-        const profile = await getProfile(session.user.id)
-        setAuth(session, profile)
-      } else {
-        clearAuth()
+    // ── Safety timeout ────────────────────────────────────────────────────────
+    // If INITIAL_SESSION never fires (edge case / network hang),
+    // force-resolve after 8s so the user is never stuck forever.
+    const safetyTimeout = setTimeout(() => {
+      if (useAuthStore.getState().loading) {
+        console.warn('[Auth] Safety timeout — forcing clearAuth()')
+        useAuthStore.getState().clearAuth()
       }
-    })
+    }, 8000)
+
+    // ── Single source of truth: onAuthStateChange ─────────────────────────────
+    // In Supabase v2, INITIAL_SESSION fires immediately after subscription
+    // with the current session (from localStorage) — no separate getSession()
+    // needed. getSession() was the cause of hangs with stale refresh tokens.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, currentSession) => {
+        console.log(`[Auth] ${event}`, currentSession ? `uid=${currentSession.user.id}` : 'no session')
+
+        if (event === 'INITIAL_SESSION') {
+          clearTimeout(safetyTimeout) // Event fired — cancel the fallback
+          if (currentSession) {
+            const profileData = await getProfile(currentSession.user.id)
+            useAuthStore.getState().setAuth(currentSession, profileData)
+          } else {
+            useAuthStore.getState().clearAuth()
+          }
+          return
+        }
+
+        if (event === 'SIGNED_IN') {
+          if (currentSession) {
+            useAuthStore.getState().setLoading(true)
+            const profileData = await getProfile(currentSession.user.id)
+            useAuthStore.getState().setAuth(currentSession, profileData)
+          }
+          return
+        }
+
+        if (event === 'TOKEN_REFRESHED') {
+          // Session refreshed — update the store without flashing loading
+          if (currentSession) {
+            const profileData = await getProfile(currentSession.user.id)
+            useAuthStore.getState().setAuth(currentSession, profileData)
+          }
+          return
+        }
+
+        if (event === 'SIGNED_OUT') {
+          useAuthStore.getState().clearAuth()
+          return
+        }
+      }
+    )
 
     return () => {
-      mounted = false;
+      clearTimeout(safetyTimeout)
       subscription.unsubscribe()
     }
-  }, [setAuth, setLoading, clearAuth])
+  }, [])
 
-  return { session, profile, loading: useAuthStore((state) => state.loading) }
+  return { session, profile, loading }
 }

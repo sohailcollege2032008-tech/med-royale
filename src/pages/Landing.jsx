@@ -46,8 +46,16 @@ export default function Landing() {
                 to={profile?.role === 'owner' ? '/owner/dashboard' : profile?.role === 'host' ? '/host/dashboard' : '/player/join'}
                 className="w-full rounded-xl bg-primary px-6 py-4 font-bold text-background transition-colors hover:bg-[#00D4FF]"
               >
-                Enter Dashboard
+                Enter {profile?.role === 'owner' ? 'Owner ' : ''}Dashboard
               </Link>
+              {profile?.role === 'owner' && (
+                <Link 
+                  to="/host/dashboard"
+                  className="w-full rounded-xl bg-white/5 border border-primary/30 px-6 py-4 font-bold text-primary transition-colors hover:bg-primary/10"
+                >
+                  Enter Host Dashboard
+                </Link>
+              )}
             </div>
           </div>
         )}

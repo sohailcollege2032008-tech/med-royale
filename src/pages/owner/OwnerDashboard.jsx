@@ -72,7 +72,12 @@ export default function OwnerDashboard() {
             <h1 className="text-3xl font-display font-bold text-primary">Owner Dashboard</h1>
             <p className="text-gray-400 mt-2 font-sans">Manage Authorized Hosts</p>
           </div>
-          <Link to="/" className="text-gray-400 hover:text-white transition-colors">Return Home</Link>
+          <div className="flex items-center gap-4">
+            <Link to="/host/dashboard" className="px-4 py-2 rounded-lg bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 font-bold transition-all">
+              Go to Host Dashboard
+            </Link>
+            <Link to="/" className="text-gray-400 hover:text-white transition-colors">Return Home</Link>
+          </div>
         </header>
 
         <section className="bg-gray-900/50 p-6 rounded-2xl border border-gray-800 backdrop-blur-sm">
