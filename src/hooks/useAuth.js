@@ -8,26 +8,39 @@ function initAuthListener() {
   if (isListenerSubscribed) return
   isListenerSubscribed = true
 
-  async function getProfile(userId) {
+  // Retry up to MAX_RETRIES times with RETRY_DELAY_MS between attempts
+  const MAX_RETRIES = 3
+  const RETRY_DELAY_MS = 1500
+
+  async function getProfile(userId, attempt = 1) {
     try {
-      const queryPromise = supabase
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 6000)
+
+      const { data, error } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', userId)
         .single()
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Profile fetch timeout')), 6000)
-      )
-      const { data, error } = await Promise.race([queryPromise, timeoutPromise])
+        .abortSignal(controller.signal)
+
+      clearTimeout(timeoutId)
+
       if (error) {
-        if (error.code !== 'PGRST116') {
-          console.error('[Auth] Profile fetch error:', error)
-        }
-        return null
+        if (error.code === 'PGRST116') return null // row not found — legit
+        throw error
       }
       return data
     } catch (err) {
-      console.error('[Auth] Profile fetch exception:', err)
+      console.warn(`[Auth] Profile fetch attempt ${attempt}/${MAX_RETRIES} failed:`, err.message)
+
+      // Retry with delay
+      if (attempt < MAX_RETRIES) {
+        await new Promise(r => setTimeout(r, RETRY_DELAY_MS))
+        return getProfile(userId, attempt + 1)
+      }
+
+      console.error('[Auth] All profile fetch attempts failed.')
       return null
     }
   }

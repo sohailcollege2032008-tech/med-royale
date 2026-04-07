@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { useAuthStore } from '../stores/authStore'
@@ -9,9 +9,22 @@ export default function Landing() {
   const session = useAuthStore(state => state.session)
   const profile = useAuthStore(state => state.profile)
   const loading = useAuthStore(state => state.loading)
+  const [isRetrying, setIsRetrying] = useState(false)
 
   const handleSignOut = async () => {
     await supabase.auth.signOut()
+  }
+
+  const handleRetry = async () => {
+    if (!session) return
+    setIsRetrying(true)
+    // Re-fetch profile manually and update store
+    const { data } = await supabase
+      .from('profiles').select('*').eq('id', session.user.id).single()
+    if (data) {
+      useAuthStore.getState().setAuth(session, data)
+    }
+    setIsRetrying(false)
   }
 
   return (
@@ -37,18 +50,30 @@ export default function Landing() {
           </div>
 
         ) : !profile ? (
-          // Session exists but profile missing — show sign out option
+          // Session exists but profile missing — offer retry
           <div className="space-y-4 pt-8 font-sans">
-            <div className="rounded-2xl border border-amber-800/40 bg-amber-900/20 p-5 text-amber-300 text-sm">
-              ⚠️ حدث خطأ في تحميل بيانات حسابك. يرجى تسجيل الخروج والمحاولة مرة أخرى.
+            <div className="rounded-2xl border border-amber-800/40 bg-amber-900/20 p-5 text-amber-300 text-sm text-center">
+              {isRetrying
+                ? <span className="animate-pulse">⏳ جاري إعادة تحميل بيانات حسابك...</span>
+                : '⚠️ تعذّر تحميل بيانات حسابك. تحقق من الاتصال وحاول مجددًا.'
+              }
             </div>
             <button
+              onClick={handleRetry}
+              disabled={isRetrying}
+              className="w-full rounded-xl bg-primary/10 border border-primary/40 px-6 py-3 font-bold text-primary hover:bg-primary/20 transition-colors disabled:opacity-50"
+            >
+              {isRetrying ? 'جاري المحاولة...' : '🔄 إعادة المحاولة'}
+            </button>
+            <button
               onClick={handleSignOut}
-              className="w-full rounded-xl bg-red-500/10 border border-red-500/30 px-6 py-3 font-bold text-red-400 hover:bg-red-500/20 transition-colors"
+              disabled={isRetrying}
+              className="w-full rounded-xl bg-red-500/10 border border-red-500/30 px-6 py-3 font-bold text-red-400 hover:bg-red-500/20 transition-colors disabled:opacity-50 text-sm"
             >
               تسجيل الخروج
             </button>
           </div>
+
 
         ) : (
           <div className="space-y-6 pt-8 font-sans">
