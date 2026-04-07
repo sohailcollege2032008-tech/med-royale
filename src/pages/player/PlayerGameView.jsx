@@ -166,10 +166,18 @@ export default function PlayerGameView() {
       p_reaction_time_ms: reactionMs
     })
 
+    // Explicit Error Handling: Do not fail silently!
     if (error || data?.error) {
-      console.warn('[Game] Submit error:', error || data?.error)
-      // Optional: show a small toast or just let it be. 
-      // We don't want to alert() here to avoid breaking user flow during intense play.
+      console.error('[Game] Submit error:', error || data?.error);
+      
+      // 1. Alert the player that the submission failed
+      alert("⚠️ Failed to submit your answer due to a network or permission issue. Please try again.");
+      
+      // 2. Revert the Optimistic UI state (Unlock so they can click again)
+      setAnswerLocked(false);
+      setSelectedChoice(null);
+      
+      return; // Halt further execution
     }
   }
 
