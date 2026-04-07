@@ -76,7 +76,7 @@ CREATE TABLE rooms (
   question_set_id UUID REFERENCES question_sets(id), -- link to saved question set
   title TEXT NOT NULL,
   questions JSONB NOT NULL,
-  status VARCHAR(20) DEFAULT 'lobby' CHECK (status IN ('lobby', 'playing', 'finished')),
+  status VARCHAR(20) DEFAULT 'lobby' CHECK (status IN ('lobby', 'playing', 'revealing', 'finished')),
   current_question_index INTEGER DEFAULT -1,
   question_started_at TIMESTAMPTZ,
   requires_approval BOOLEAN DEFAULT true, -- host must approve players
@@ -185,16 +185,15 @@ CREATE OR REPLACE FUNCTION submit_answer(
   p_player_id UUID,
   p_question_index INTEGER,
   p_selected_choice INTEGER,
-  p_correct_choice INTEGER
+  p_correct_choice INTEGER,
+  p_reaction_time_ms INTEGER
 ) RETURNS JSONB AS $$
 DECLARE
   v_is_correct BOOLEAN;
   v_is_first BOOLEAN;
   v_existing_first UUID;
-  v_response_time INTEGER;
-  v_question_started TIMESTAMPTZ;
 BEGIN
-  -- Check if player already answered this question
+  -- التحقق مما إذا كان اللاعب قد أجاب بالفعل
   IF EXISTS (
     SELECT 1 FROM answers
     WHERE room_id = p_room_id AND player_id = p_player_id AND question_index = p_question_index
@@ -203,12 +202,10 @@ BEGIN
   END IF;
 
   v_is_correct := (p_selected_choice = p_correct_choice);
-
-  SELECT question_started_at INTO v_question_started FROM rooms WHERE id = p_room_id;
-  v_response_time := EXTRACT(MILLISECONDS FROM (now() - v_question_started))::INTEGER;
-
   v_is_first := false;
+
   IF v_is_correct THEN
+    -- حماية من التزامن (Race condition) لمنع فوز شخصين في نفس اللحظة
     PERFORM pg_advisory_xact_lock(hashtext(p_room_id::TEXT || p_question_index::TEXT));
 
     SELECT player_id INTO v_existing_first
@@ -221,9 +218,11 @@ BEGIN
     END IF;
   END IF;
 
+  -- تسجيل الإجابة مع إضافة وقت رد الفعل القادم من المتصفح
   INSERT INTO answers (room_id, player_id, question_index, selected_choice, is_correct, is_first_correct, response_time_ms)
-  VALUES (p_room_id, p_player_id, p_question_index, p_selected_choice, v_is_correct, v_is_first, v_response_time);
+  VALUES (p_room_id, p_player_id, p_question_index, p_selected_choice, v_is_correct, v_is_first, p_reaction_time_ms);
 
+  -- زيادة السكور للفائز الأول
   IF v_is_first THEN
     UPDATE players SET score = score + 1 WHERE id = p_player_id;
   END IF;
@@ -231,7 +230,7 @@ BEGIN
   RETURN jsonb_build_object(
     'is_correct', v_is_correct,
     'is_first', v_is_first,
-    'response_time_ms', v_response_time
+    'response_time_ms', p_reaction_time_ms
   );
 END;
 $$ LANGUAGE plpgsql;
