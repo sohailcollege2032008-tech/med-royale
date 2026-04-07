@@ -65,10 +65,16 @@ export const useAuthStore = create((set, get) => ({
 
       if (error) {
         console.warn('[AuthStore] Profile fetch error:', error.message)
-        // If profile doesn't exist yet, we still have the session
         set({ session, profile: null, loading: false, initialized: true })
       } else {
         set({ session, profile: data, loading: false, initialized: true })
+      }
+
+      // Explicitly sync the Realtime auth token whenever the session is set.
+      // Supabase JS v2 does this internally, but calling it explicitly here
+      // ensures the token is always current before any channel subscribes.
+      if (session?.access_token) {
+        supabase.realtime.setAuth(session.access_token)
       }
     } catch (err) {
       console.error('[AuthStore] fetchProfile exception:', err)

@@ -27,6 +27,9 @@ export default function WaitingRoom() {
     }
     checkStatus()
 
+    // Explicitly set Realtime auth token to ensure RLS evaluates with the correct user
+    supabase.realtime.setAuth(session.access_token)
+
     const sub = supabase.channel(`join_req_${session.user.id}`)
       .on('postgres_changes', {
         event: 'UPDATE',
@@ -40,7 +43,14 @@ export default function WaitingRoom() {
             navigate(`/player/game/${roomId}`)
           }
         }
-      }).subscribe()
+      })
+      .subscribe((status, err) => {
+        if (status === 'CHANNEL_ERROR') {
+          console.error('[WaitingRoom] Realtime channel error:', err)
+        } else {
+          console.log('[WaitingRoom] Realtime status:', status)
+        }
+      })
 
     return () => {
       supabase.removeChannel(sub)

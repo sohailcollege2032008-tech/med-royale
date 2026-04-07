@@ -38,9 +38,15 @@ export default function PlayerGameView() {
   }
 
   useEffect(() => {
+    if (!session) return
+    const userId = session.user.id
+
+    // Explicitly set Realtime auth token to ensure RLS evaluates with the correct user
+    supabase.realtime.setAuth(session.access_token)
+
     fetchInitialData()
 
-    const sub = supabase.channel(`player_room_${roomId}_${session.user.id}`)
+    const sub = supabase.channel(`player_room_${roomId}_${userId}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` }, (payload) => {
         setRoom(prev => {
           const updated = { ...prev, ...payload.new }
@@ -59,13 +65,19 @@ export default function PlayerGameView() {
           return updated
         })
       })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'players', filter: `user_id=eq.${session.user.id}` }, (payload) => {
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'players', filter: `user_id=eq.${userId}` }, (payload) => {
         setPlayer(payload.new)
       })
-      .subscribe()
+      .subscribe((status, err) => {
+        if (status === 'CHANNEL_ERROR') {
+          console.error('[Player] Realtime channel error:', err)
+        } else {
+          console.log('[Player] Realtime status:', status)
+        }
+      })
 
     return () => supabase.removeChannel(sub)
-  }, [roomId, session])
+  }, [roomId, session?.user?.id])
 
   const fetchInitialData = async () => {
     const { data: p } = await supabase

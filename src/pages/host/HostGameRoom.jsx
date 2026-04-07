@@ -59,7 +59,11 @@ export default function HostGameRoom() {
   const [processingRequests, setProcessingRequests] = useState(new Set())
 
   useEffect(() => {
+    if (!session) return
     fetchInitialData()
+
+    // Explicitly set Realtime auth token to ensure RLS evaluates with the correct user
+    supabase.realtime.setAuth(session.access_token)
 
     const sub = supabase.channel(`host_room_${roomId}`)
       // Join requests: push payload directly (no fetch!)
@@ -87,10 +91,16 @@ export default function HostGameRoom() {
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` }, (payload) => {
         setRoom(prev => ({ ...prev, ...payload.new }))
       })
-      .subscribe()
+      .subscribe((status, err) => {
+        if (status === 'CHANNEL_ERROR') {
+          console.error('[Host] Realtime channel error:', err)
+        } else {
+          console.log('[Host] Realtime status:', status)
+        }
+      })
 
     return () => supabase.removeChannel(sub)
-  }, [roomId])
+  }, [roomId, session])
 
   const fetchInitialData = async () => {
     const { data: roomData, error } = await supabase.from('rooms').select('*').eq('id', roomId).single()
