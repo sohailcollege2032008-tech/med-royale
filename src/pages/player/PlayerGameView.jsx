@@ -20,7 +20,7 @@ export default function PlayerGameView() {
 
     const sub = supabase.channel(`player_room_${roomId}_${session.user.id}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` }, (payload) => {
-        setRoom(payload.new)
+        setRoom(prev => ({ ...prev, ...payload.new }))
         setCurrentAnswer(null) // reset answer state on new question
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'players', filter: `user_id=eq.${session.user.id}` }, (payload) => {

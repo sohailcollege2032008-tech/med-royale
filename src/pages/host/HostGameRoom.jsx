@@ -30,7 +30,7 @@ export default function HostGameRoom() {
         fetchAnswers()
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` }, (payload) => {
-        setRoom(payload.new)
+        setRoom(prev => ({ ...prev, ...payload.new }))
       })
       .subscribe()
 
