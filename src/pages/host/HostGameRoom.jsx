@@ -8,6 +8,9 @@ import {
   Eye, Timer, Loader2, WifiOff, StopCircle, Shuffle, Star, Zap, Settings
 } from 'lucide-react'
 import confetti from 'canvas-confetti'
+import { generateCorrectAnswerHash, verifyAnswerHash } from '../../utils/crypto'
+import HostGameReport from '../../components/HostGameReport'
+import ActivityLogViewer from '../../components/ActivityLogViewer'
 
 // ── Countdown bar (manual, host-triggered) ─────────────────────────────────
 function CountdownBar({ startedAt, duration }) {
@@ -225,6 +228,8 @@ export default function HostGameRoom() {
 
   const [toasts, setToasts]               = useState([])         // correct-answer notifications
   const [downloadingLogs, setDownloadingLogs] = useState(false)
+  const [gameResults, setGameResults] = useState(null)  // collected results for HostGameReport
+  const [selectedPlayer, setSelectedPlayer] = useState(null) // for ActivityLogViewer
   const notifiedAnswersRef = useRef(new Set())   // user_ids already toasted this question
   const roomStatusRef      = useRef(null)         // mirror of room.status for callbacks
 
@@ -329,6 +334,9 @@ export default function HostGameRoom() {
   // ── Start game ────────────────────────────────────────────────────────────
   const startGame = async () => {
     try {
+      // Generate secret key from room ID and created_at
+      const secretKey = `${roomId}:${room.created_at}`
+
       // Optionally shuffle choices for every question
       let questions = room.questions
       if (gameConfig.shuffle_choices) {
@@ -346,12 +354,38 @@ export default function HostGameRoom() {
         }
       }
 
+      // Generate hashes for correct answers and remove plain correct field
+      const secureQuestions = {
+        ...questions,
+        questions: questions.questions.map(async (q, qIdx) => {
+          const correctHash = await generateCorrectAnswerHash(
+            q.correct,
+            `${roomId}-q${qIdx}`,
+            roomId,
+            secretKey
+          )
+          // Return question without the correct field
+          const { correct, ...qWithoutCorrect } = q
+          return {
+            ...qWithoutCorrect,
+            correct_hash: correctHash,
+          }
+        })
+      }
+
+      // Wait for all hashes to be generated
+      const secureQuestionsArray = await Promise.all(secureQuestions.questions)
+      const finalQuestions = {
+        ...questions,
+        questions: secureQuestionsArray
+      }
+
       await update(ref(rtdb, `rooms/${roomId}`), {
         status: 'playing',
         current_question_index: 0,
         question_started_at: Date.now(),
         config: gameConfig,
-        questions,
+        questions: finalQuestions,
         countdown_started_at: null,
         countdown_duration: null,
       })
@@ -373,13 +407,30 @@ export default function HostGameRoom() {
     try {
       const config       = room.config || { scoring_mode: 'classic' }
       const qIdx         = room.current_question_index
-      const correctChoice = room.questions.questions[qIdx].correct
+      const currentQuestion = room.questions.questions[qIdx]
+      const correctHash = currentQuestion.correct_hash
 
       const answersSnap = await get(ref(rtdb, `rooms/${roomId}/answers/${qIdx}`))
       const allAnswers  = answersSnap.exists() ? Object.values(answersSnap.val()) : []
-      const correct     = allAnswers
-        .filter(a => a.selected_choice === correctChoice)
-        .sort((a, b) => a.reaction_time_ms - b.reaction_time_ms)
+
+      // Generate secret key for hash verification
+      const secretKey = `${roomId}:${room.created_at}`
+
+      // Verify each answer against the correct hash
+      const correct = []
+      for (const answer of allAnswers) {
+        const isCorrect = await verifyAnswerHash(
+          answer.selected_choice,
+          correctHash,
+          `${roomId}-q${qIdx}`,
+          roomId,
+          secretKey
+        )
+        if (isCorrect) {
+          correct.push(answer)
+        }
+      }
+      correct.sort((a, b) => a.reaction_time_ms - b.reaction_time_ms)
 
       const winner = correct[0] || null
 
@@ -444,12 +495,20 @@ export default function HostGameRoom() {
         correct_count:   correct.length,
       }
 
+      // Store the correct answer for reveal after game ends
+      const correctAnswerText = currentQuestion.choices[
+        correct.length > 0
+          ? allAnswers.find(a => correct.includes(a))?.selected_choice
+          : -1
+      ] || 'Not available'
+
       await update(ref(rtdb), {
         ...scoreUpdates,
         ...answerUpdates,
         ...rankUpdates,
         [`rooms/${roomId}/status`]:      'revealing',
         [`rooms/${roomId}/reveal_data`]: revealData,
+        [`rooms/${roomId}/revealed_answers/${qIdx}`]: correctAnswerText,
       })
       setRevealResult(revealData)
     } catch (err) { alert('Reveal failed: ' + err.message) }
@@ -556,6 +615,64 @@ export default function HostGameRoom() {
       setDownloadingLogs(false)
     }
   }
+
+  // ── Collect game results for HostGameReport ───────────────────────────────
+  const collectGameResults = async () => {
+    try {
+      const questions = room.questions?.questions || []
+      const results = []
+
+      // Collect data for each player
+      for (const player of players) {
+        const playerAnswers = []
+        let activityLog = []
+
+        // Collect answers for all questions
+        for (let qIdx = 0; qIdx < questions.length; qIdx++) {
+          const ansSnap = await get(ref(rtdb, `rooms/${roomId}/answers/${qIdx}/${player.user_id}`))
+          if (ansSnap.exists()) {
+            const ansData = ansSnap.val()
+            playerAnswers.push({
+              question_index: qIdx,
+              is_correct: ansData.is_correct || false,
+              reaction_time: ansData.reaction_time_ms || 0,
+              selected_choice: ansData.selected_choice,
+              points_earned: ansData.points_earned || 0,
+              rank: ansData.rank || null,
+              is_first_correct: ansData.is_first_correct || false,
+            })
+          }
+        }
+
+        // Try to get activity log if available
+        const activitySnap = await get(ref(rtdb, `rooms/${roomId}/activity_log/${player.user_id}`))
+        if (activitySnap.exists()) {
+          activityLog = Object.values(activitySnap.val()) || []
+        }
+
+        results.push({
+          userId: player.user_id,
+          username: player.nickname || 'Unknown',
+          score: player.score || 0,
+          answers: playerAnswers,
+          activityLog: activityLog,
+          avatar_url: player.avatar_url || null,
+        })
+      }
+
+      setGameResults(results)
+    } catch (err) {
+      console.error('Error collecting game results:', err)
+      alert('Error collecting game results: ' + err.message)
+    }
+  }
+
+  // ── Effect: Collect results when game finishes ──────────────────────────
+  useEffect(() => {
+    if (room?.status === 'finished' && !gameResults) {
+      collectGameResults()
+    }
+  }, [room?.status, room?.questions, gameResults, roomId, players])
 
   // ─────────────────────────────────────────────────────────────────────────
   if (!room) return (
@@ -818,37 +935,55 @@ export default function HostGameRoom() {
 
         {/* ── FINISHED ──────────────────────────────────────────────────── */}
         {room.status === 'finished' && (
-          <div className="bg-gray-900/50 p-12 rounded-2xl border border-gray-800 text-center">
-            <Trophy size={64} className="mx-auto text-[#FFD700] mb-6" />
-            <h2 className="text-5xl font-display font-bold mb-4 text-transparent bg-clip-text bg-gradient-to-r from-primary to-secondary">Game Over!</h2>
-            <p className="text-xl text-gray-400 mb-10">Final Leaderboard</p>
-            <div className="max-w-2xl mx-auto space-y-3">
-              {players.map((p, idx) => (
-                <div key={p.user_id} className={`flex items-center justify-between p-4 rounded-xl border ${idx === 0 ? 'bg-primary/20 border-primary' : 'bg-gray-800 border-gray-700'}`}>
-                  <div className="flex items-center gap-4">
-                    <span className={`text-2xl font-bold ${idx === 0 ? 'text-primary' : 'text-gray-500'}`}>#{idx + 1}</span>
-                    {p.avatar_url ? <img src={p.avatar_url} alt="" className="w-9 h-9 rounded-full" /> : <div className="w-9 h-9 rounded-full bg-gray-700 flex items-center justify-center"><UserCheck size={18} /></div>}
-                    <span className="font-bold text-lg">{p.nickname}</span>
+          <div className="space-y-6">
+            {/* Show ActivityLogViewer if player is selected */}
+            {selectedPlayer ? (
+              <div className="bg-gray-900/50 p-8 rounded-2xl border border-gray-800">
+                <button
+                  onClick={() => setSelectedPlayer(null)}
+                  className="mb-6 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg transition-colors text-sm font-semibold"
+                >
+                  ← Back to Report
+                </button>
+                <ActivityLogViewer
+                  username={selectedPlayer.username}
+                  activityLog={selectedPlayer.activityLog}
+                  suspicionIndicators={selectedPlayer.indicators || []}
+                />
+              </div>
+            ) : (
+              <>
+                {/* Show report or final leaderboard while loading */}
+                {gameResults ? (
+                  <HostGameReport
+                    gameResults={gameResults}
+                    onViewDetails={setSelectedPlayer}
+                  />
+                ) : (
+                  <div className="bg-gray-900/50 p-12 rounded-2xl border border-gray-800 text-center">
+                    <Loader2 size={48} className="mx-auto text-primary animate-spin mb-4" />
+                    <p className="text-gray-400">جاري تحضير التقرير...</p>
                   </div>
-                  <div className="text-2xl font-mono font-bold text-white">{p.score} PTS</div>
+                )}
+
+                {/* Download and navigation buttons */}
+                <div className="flex items-center justify-center gap-4 flex-wrap">
+                  <button
+                    onClick={downloadLogs}
+                    disabled={downloadingLogs}
+                    className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-200 font-bold px-6 py-3 rounded-xl transition-colors disabled:opacity-50"
+                  >
+                    {downloadingLogs
+                      ? <><Loader2 size={16} className="animate-spin" /> جاري التحميل...</>
+                      : <><Trophy size={16} className="text-[#FFD700]" /> تحميل اللوجز (.txt)</>}
+                  </button>
+                  <button onClick={() => navigate('/host/dashboard')}
+                    className="bg-primary text-background font-bold px-8 py-3 rounded-xl hover:bg-[#00D4FF] transition-colors">
+                    Back to Dashboard
+                  </button>
                 </div>
-              ))}
-            </div>
-            <div className="mt-10 flex items-center justify-center gap-4 flex-wrap">
-              <button
-                onClick={downloadLogs}
-                disabled={downloadingLogs}
-                className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-200 font-bold px-6 py-3 rounded-xl transition-colors disabled:opacity-50"
-              >
-                {downloadingLogs
-                  ? <><Loader2 size={16} className="animate-spin" /> جاري التحميل...</>
-                  : <><Trophy size={16} className="text-[#FFD700]" /> تحميل اللوجز (.txt)</>}
-              </button>
-              <button onClick={() => navigate('/host/dashboard')}
-                className="bg-primary text-background font-bold px-8 py-3 rounded-xl hover:bg-[#00D4FF] transition-colors">
-                Back to Dashboard
-              </button>
-            </div>
+              </>
+            )}
           </div>
         )}
       </div>
