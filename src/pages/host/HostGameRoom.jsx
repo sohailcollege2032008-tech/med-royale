@@ -402,16 +402,40 @@ export default function HostGameRoom() {
         toUpdate.map(a => get(ref(rtdb, `rooms/${roomId}/players/${a.user_id}/score`)))
       )
 
+      // Track new scores locally to build leaderboard without extra reads
+      const newScoreById = {}
+      players.forEach(p => { newScoreById[p.user_id] = p.score })
+
       toUpdate.forEach((a, idx) => {
         const pts = getPoints(correct.indexOf(a))
-        scoreUpdates[`rooms/${roomId}/players/${a.user_id}/score`] = (scoreSnaps[idx].val() || 0) + pts
+        const newScore = (scoreSnaps[idx].val() || 0) + pts
+        scoreUpdates[`rooms/${roomId}/players/${a.user_id}/score`] = newScore
         answerUpdates[`rooms/${roomId}/answers/${qIdx}/${a.user_id}/points_earned`] = pts
+        newScoreById[a.user_id] = newScore
       })
 
       // Rank + is_first_correct for all correct answers
       correct.forEach((a, i) => {
         answerUpdates[`rooms/${roomId}/answers/${qIdx}/${a.user_id}/rank`]             = i + 1
         answerUpdates[`rooms/${roomId}/answers/${qIdx}/${a.user_id}/is_first_correct`] = i === 0
+      })
+
+      // ── Build leaderboard summary (top 5 + each player's rank) ───────────
+      // Sort players by new score (no extra DB read — uses live `players` state)
+      const sortedPlayers = [...players]
+        .map(p => ({ ...p, score: newScoreById[p.user_id] ?? p.score }))
+        .sort((a, b) => b.score - a.score)
+
+      const top5 = sortedPlayers.slice(0, 5).map((p, i) => ({
+        rank:     i + 1,
+        user_id:  p.user_id,
+        nickname: p.nickname,
+        score:    newScoreById[p.user_id] ?? p.score,
+      }))
+
+      const rankUpdates = { [`rooms/${roomId}/leaderboard/top5`]: top5 }
+      sortedPlayers.forEach((p, i) => {
+        rankUpdates[`rooms/${roomId}/players/${p.user_id}/rank`] = i + 1
       })
 
       const revealData = {
@@ -423,6 +447,7 @@ export default function HostGameRoom() {
       await update(ref(rtdb), {
         ...scoreUpdates,
         ...answerUpdates,
+        ...rankUpdates,
         [`rooms/${roomId}/status`]:      'revealing',
         [`rooms/${roomId}/reveal_data`]: revealData,
       })

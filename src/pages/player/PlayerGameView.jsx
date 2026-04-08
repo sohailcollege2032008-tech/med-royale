@@ -8,15 +8,16 @@ import { Trophy, Clock, CheckCircle2, XCircle, AlertCircle, Zap, WifiOff, Downlo
 import confetti from 'canvas-confetti'
 
 // ── Mini leaderboard strip ────────────────────────────────────────────────────
-function MiniLeaderboard({ players, myId }) {
-  if (!players || players.length === 0) return null
-  const top = players.slice(0, 5)
-  const myRank = players.findIndex(p => p.user_id === myId) + 1
+// top5: [{rank, user_id, nickname, score}] — from rooms/${roomId}/leaderboard/top5
+// myId, myRank, myScore, myNickname — player's own data (from player node)
+function MiniLeaderboard({ top5, myId, myRank, myScore, myNickname }) {
+  if (!top5 || top5.length === 0) return null
+  const isMeInTop5 = top5.some(p => p.user_id === myId)
 
   return (
     <div className="w-full max-w-2xl mb-3">
       <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 scrollbar-none">
-        {top.map((p, i) => {
+        {top5.map(p => {
           const isMe = p.user_id === myId
           return (
             <div key={p.user_id}
@@ -26,20 +27,20 @@ function MiniLeaderboard({ players, myId }) {
                   : 'bg-gray-800/80 border border-gray-700 text-gray-300'
               }`}
             >
-              <span className="text-gray-500 font-mono">#{i + 1}</span>
+              <span className="text-gray-500 font-mono">#{p.rank}</span>
               <span className="max-w-[80px] truncate">{p.nickname}</span>
               <span className={`font-mono ${isMe ? 'text-primary' : 'text-gray-400'}`}>{p.score}</span>
             </div>
           )
         })}
-        {/* Show my rank if not in top 5 */}
-        {myRank > 5 && (
+        {/* Show my chip only if I'm not in top 5 */}
+        {!isMeInTop5 && myRank && (
           <>
             <span className="text-gray-700 text-xs flex-shrink-0">···</span>
             <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold flex-shrink-0 bg-primary/20 border border-primary/50 text-primary">
               <span className="text-gray-500 font-mono">#{myRank}</span>
-              <span className="max-w-[80px] truncate">{players[myRank - 1]?.nickname}</span>
-              <span className="font-mono text-primary">{players[myRank - 1]?.score}</span>
+              <span className="max-w-[80px] truncate">{myNickname}</span>
+              <span className="font-mono text-primary">{myScore}</span>
             </div>
           </>
         )}
@@ -108,6 +109,7 @@ export default function PlayerGameView() {
   const [answerLocked, setAnswerLocked]     = useState(false)
   const [revealedResult, setRevealedResult] = useState(null)
   const [hostOnline, setHostOnline]         = useState(true)
+  const [top5, setTop5]                     = useState([])
 
   // Nickname editing
   const [editingName, setEditingName]   = useState(false)
@@ -187,12 +189,11 @@ export default function PlayerGameView() {
     return () => unsub()
   }, [roomId, session])
 
-  // ── Leaderboard subscription ──────────────────────────────────────────────
+  // ── Leaderboard subscription (top 5 only — minimal bandwidth) ────────────
   useEffect(() => {
     if (!session) return
-    const unsub = onValue(ref(rtdb, `rooms/${roomId}/players`), snap => {
-      if (!snap.exists()) { setLeaderboard([]); return }
-      setLeaderboard(Object.values(snap.val()).sort((a, b) => b.score - a.score))
+    const unsub = onValue(ref(rtdb, `rooms/${roomId}/leaderboard/top5`), snap => {
+      setTop5(snap.exists() ? Object.values(snap.val()) : [])
     })
     return () => unsub()
   }, [roomId, session])
@@ -453,7 +454,7 @@ export default function PlayerGameView() {
           <div className="w-full max-w-2xl flex flex-col gap-3">
 
             {/* Mini leaderboard */}
-            <MiniLeaderboard players={leaderboard} myId={myId} />
+            <MiniLeaderboard top5={top5} myId={myId} myRank={player?.rank} myScore={player?.score} myNickname={player?.nickname} />
 
             {/* Question card */}
             <div className="bg-gray-900/80 rounded-2xl border border-gray-800 p-4 flex-shrink-0 space-y-3">
@@ -525,7 +526,7 @@ export default function PlayerGameView() {
           <div className="w-full max-w-2xl flex flex-col gap-3">
 
             {/* Mini leaderboard */}
-            <MiniLeaderboard players={leaderboard} myId={myId} />
+            <MiniLeaderboard top5={top5} myId={myId} myRank={player?.rank} myScore={player?.score} myNickname={player?.nickname} />
 
             {/* Question */}
             <div className="bg-gray-900/80 rounded-2xl border border-gray-800 p-4 flex-shrink-0 space-y-2">
@@ -652,14 +653,14 @@ export default function PlayerGameView() {
               <h1 className="text-5xl font-display font-bold mb-3">انتهت!</h1>
               <p className="text-xl text-gray-400 mb-2">نقاطك النهائية</p>
               <p className="text-5xl font-mono font-bold text-primary mb-8">{player.score}</p>
-              {/* Mini final leaderboard */}
-              {leaderboard.length > 0 && (
+              {/* Mini final leaderboard — uses top5 (already minimal) */}
+              {top5.length > 0 && (
                 <div className="space-y-2 max-w-xs mx-auto mb-8">
-                  {leaderboard.slice(0, 5).map((p, i) => (
+                  {top5.map(p => (
                     <div key={p.user_id} className={`flex items-center justify-between px-4 py-2 rounded-xl text-sm ${
                       p.user_id === myId ? 'bg-primary/20 border border-primary text-primary' : 'bg-gray-800 border border-gray-700'
                     }`}>
-                      <span className="font-bold">#{i + 1} {p.nickname}</span>
+                      <span className="font-bold">#{p.rank} {p.nickname}</span>
                       <span className="font-mono font-bold">{p.score}</span>
                     </div>
                   ))}
