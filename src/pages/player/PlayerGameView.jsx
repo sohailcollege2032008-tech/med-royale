@@ -102,7 +102,7 @@ export default function PlayerGameView() {
           setSelectedChoice(a.selected_choice)
           setAnswerLocked(true)
           if (room.status === 'revealing') {
-            setRevealedResult({ is_correct: a.is_correct, is_first_correct: a.is_first_correct })
+            fetchMyAnswerResult(qIdx, userId)
           }
         }
       })
@@ -111,10 +111,24 @@ export default function PlayerGameView() {
 
   // ── Fetch my answer result after reveal ───────────────────────────────────
   const fetchMyAnswerResult = async (questionIndex, userId) => {
-    const snap = await get(ref(rtdb, `rooms/${roomId}/answers/${questionIndex}/${userId}`))
-    if (snap.exists()) {
-      const a = snap.val()
-      setRevealedResult({ is_correct: a.is_correct, is_first_correct: a.is_first_correct })
+    const [answerSnap, roomSnap] = await Promise.all([
+      get(ref(rtdb, `rooms/${roomId}/answers/${questionIndex}/${userId}`)),
+      get(ref(rtdb, `rooms/${roomId}/reveal_data`))
+    ])
+
+    const winnerTimeMs = roomSnap.exists() ? roomSnap.val()?.winner_time_ms : null
+
+    if (answerSnap.exists()) {
+      const a = answerSnap.val()
+      const behindMs = a.is_correct && !a.is_first_correct && winnerTimeMs != null
+        ? Math.max(0, a.reaction_time_ms - winnerTimeMs)
+        : null
+      setRevealedResult({
+        is_correct: a.is_correct,
+        is_first_correct: a.is_first_correct,
+        reaction_time_ms: a.reaction_time_ms,
+        behind_ms: behindMs
+      })
       if (a.is_correct) confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 } })
     } else {
       setRevealedResult({ is_correct: false, is_first_correct: false, didNotAnswer: true })
@@ -304,9 +318,13 @@ export default function PlayerGameView() {
                   <>
                     <CheckCircle2 size={56} className="mx-auto mb-4 text-primary" />
                     <h3 className="text-3xl font-bold text-primary">Correct!</h3>
-                    {revealedResult.is_first_correct && (
+                    {revealedResult.is_first_correct ? (
                       <div className="inline-flex items-center gap-2 bg-[#FFD700]/20 text-[#FFD700] px-4 py-2 rounded-full font-bold mt-4">
-                        <Trophy size={16} /> Fastest correct answer! +1 Bonus
+                        <Trophy size={16} /> Fastest correct answer! +1 Point
+                      </div>
+                    ) : revealedResult.behind_ms != null && (
+                      <div className="inline-flex items-center gap-2 bg-gray-700/60 text-gray-300 px-4 py-2 rounded-full font-mono text-sm mt-4">
+                        <Clock size={14} /> {revealedResult.behind_ms}ms behind the winner
                       </div>
                     )}
                   </>
