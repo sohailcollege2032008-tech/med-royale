@@ -65,8 +65,7 @@ export default function HostGameRoom() {
     // Explicitly set Realtime auth token to ensure RLS evaluates with the correct user
     supabase.realtime.setAuth(session.access_token)
 
-    const sub = supabase.channel(`host_room_${roomId}`)
-      // Join requests: push payload directly (no fetch!)
+    const sub = supabase.channel(`host_room_${roomId}_${Date.now()}`)      // Join requests: push payload directly (no fetch!)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'join_requests', filter: `room_id=eq.${roomId}` }, (payload) => {
         setRequests(prev => [...prev, payload.new])
       })
@@ -80,7 +79,7 @@ export default function HostGameRoom() {
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'players', filter: `room_id=eq.${roomId}` }, (payload) => {
         setPlayers(prev =>
           prev.map(p => p.id === payload.new.id ? { ...p, ...payload.new } : p)
-              .sort((a, b) => b.score - a.score)
+            .sort((a, b) => b.score - a.score)
         )
       })
       // Answers: push payload directly — ZERO db reads for answers!
@@ -139,7 +138,7 @@ export default function HostGameRoom() {
   // Reset answers on question change
   useEffect(() => {
     if (room?.status === 'playing') {
-      setAnswers([])
+      fetchAnswers() // تم استبدال setAnswers([]) هنا
       setRevealResult(null)
       setTimerKey(k => k + 1)
     }
@@ -159,9 +158,9 @@ export default function HostGameRoom() {
     setProcessingRequests(prev => new Set(prev).add(requestId))
 
     try {
-      const { data, error } = await supabase.rpc('process_join_request', { 
-        p_request_id: requestId, 
-        p_action: action 
+      const { data, error } = await supabase.rpc('process_join_request', {
+        p_request_id: requestId,
+        p_action: action
       })
 
       if (error || (data && data.success === false)) {
@@ -189,7 +188,7 @@ export default function HostGameRoom() {
       current_question_index: 0,
       question_started_at: new Date().toISOString()
     }).eq('id', roomId)
-    
+
     if (error) {
       console.error('[Host] Error starting game:', error)
       alert('Failed to start game: ' + error.message)
@@ -200,7 +199,7 @@ export default function HostGameRoom() {
 
   const revealAnswer = async () => {
     setIsRevealing(true)
-    
+
     // BUG 4 FIX: Fetch fresh players first so leaderboard is accurate when host reveals
     await fetchPlayers()
 
@@ -260,12 +259,11 @@ export default function HostGameRoom() {
           </div>
           <div className="text-right">
             <div className="text-2xl font-bold">{totalPlayers} Players</div>
-            <div className={`capitalize px-4 py-1 rounded-full inline-block mt-2 text-sm font-bold ${
-              room.status === 'playing' ? 'bg-green-500/20 text-green-400' :
-              room.status === 'revealing' ? 'bg-yellow-500/20 text-yellow-400' :
-              room.status === 'finished' ? 'bg-primary/20 text-primary' :
-              'bg-gray-800 text-gray-400'
-            }`}>
+            <div className={`capitalize px-4 py-1 rounded-full inline-block mt-2 text-sm font-bold ${room.status === 'playing' ? 'bg-green-500/20 text-green-400' :
+                room.status === 'revealing' ? 'bg-yellow-500/20 text-yellow-400' :
+                  room.status === 'finished' ? 'bg-primary/20 text-primary' :
+                    'bg-gray-800 text-gray-400'
+              }`}>
               {room.status}
             </div>
           </div>
@@ -297,14 +295,14 @@ export default function HostGameRoom() {
                         </div>
                       ) : (
                         <>
-                          <button 
-                            onClick={() => handleRequest(req.id, 'approved')} 
+                          <button
+                            onClick={() => handleRequest(req.id, 'approved')}
                             className="bg-green-500/20 text-green-500 hover:bg-green-500/30 p-2 rounded-lg transition-colors"
                           >
                             <CheckCircle size={20} />
                           </button>
-                          <button 
-                            onClick={() => handleRequest(req.id, 'rejected')} 
+                          <button
+                            onClick={() => handleRequest(req.id, 'rejected')}
                             className="bg-red-500/20 text-red-500 hover:bg-red-500/30 p-2 rounded-lg transition-colors"
                           >
                             <XCircle size={20} />
@@ -385,13 +383,12 @@ export default function HostGameRoom() {
                   const isCorrect = i === currentQuestion.correct
                   const count = answers.filter(a => a.selected_choice === i).length
                   return (
-                    <div key={i} className={`p-4 rounded-xl border flex justify-between items-center transition-all ${
-                      isRevealing_
+                    <div key={i} className={`p-4 rounded-xl border flex justify-between items-center transition-all ${isRevealing_
                         ? isCorrect
                           ? 'border-primary bg-primary/10 shadow-[0_0_15px_rgba(0,255,255,0.2)]'
                           : 'border-gray-700 bg-gray-800 opacity-50'
                         : 'border-gray-700 bg-gray-800'
-                    }`}>
+                      }`}>
                       <span className={isRevealing_ && isCorrect ? 'font-bold text-primary' : ''}>{choice}</span>
                       <span className="font-mono text-xl font-bold">{count}</span>
                     </div>
