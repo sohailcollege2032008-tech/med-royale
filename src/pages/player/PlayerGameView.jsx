@@ -1,196 +1,168 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { supabase } from '../../lib/supabase'
+import { ref, onValue, get, set, runTransaction } from 'firebase/database'
+import { rtdb } from '../../lib/firebase'
 import { useAuth } from '../../hooks/useAuth'
 import { useServerClock } from '../../hooks/useServerClock'
 import { Trophy, Clock, CheckCircle2, XCircle, AlertCircle, Zap } from 'lucide-react'
 import confetti from 'canvas-confetti'
 
 export default function PlayerGameView() {
-  const { roomId } = useParams()
+  const { roomId } = useParams()   // roomId = room code (e.g. "A1B2C3")
   const { session } = useAuth()
   const navigate = useNavigate()
-
-  // Clock sync: measures offset between client clock and server clock (SNTP-style)
   const clockOffset = useServerClock()
 
   const [room, setRoom] = useState(null)
   const [player, setPlayer] = useState(null)
-  // The choice index the player picked this round (optimistic)
   const [selectedChoice, setSelectedChoice] = useState(null)
-  // Whether the answer has been confirmed by the server
   const [answerLocked, setAnswerLocked] = useState(false)
-  // Result revealed by host: { is_correct, is_first_correct }
   const [revealedResult, setRevealedResult] = useState(null)
 
-  // Stores the CORRECTED SERVER timestamp when the current question appeared
-  // = Date.now() + clockOffset at the moment the question was shown
-  // This is what we compare against to compute fair reaction time
   const questionServerStartRef = useRef(null)
+  const prevQuestionIndexRef = useRef(null)
+  const prevStatusRef = useRef(null)
 
-  // Reset per-question state when a new question appears
   const resetForNewQuestion = () => {
     setSelectedChoice(null)
     setAnswerLocked(false)
     setRevealedResult(null)
-    // Record the server-corrected time at which this question appeared on screen
     questionServerStartRef.current = Date.now() + clockOffset.current
   }
 
+  // ── Subscribe to room ─────────────────────────────────────────────────────
   useEffect(() => {
     if (!session) return
-    const userId = session.user.id
+    const userId = session.uid
 
-    // Explicitly set Realtime auth token to ensure RLS evaluates with the correct user
-    supabase.realtime.setAuth(session.access_token)
+    const roomRef = ref(rtdb, `rooms/${roomId}`)
+    const unsubRoom = onValue(roomRef, async (snap) => {
+      if (!snap.exists()) return
+      const data = snap.val()
 
-    fetchInitialData()
-
-    const sub = supabase.channel(`player_room_${roomId}_${session.user.id}_${Date.now()}`)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` }, (payload) => {
-        setRoom(prev => {
-          const updated = { ...prev, ...payload.new }
-
-          // New question started → reset everything
-          if (payload.new.current_question_index !== undefined &&
-              payload.new.current_question_index !== prev?.current_question_index) {
-            resetForNewQuestion()
-          }
-
-          // Host revealed answers → player can now see if they were right
-          if (payload.new.status === 'revealing' && prev?.status !== 'revealing') {
-            fetchMyAnswerResult(payload.new.current_question_index ?? prev?.current_question_index)
-          }
-
-          return updated
-        })
-      })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'players', filter: `user_id=eq.${userId}` }, (payload) => {
-        setPlayer(payload.new)
-      })
-      .subscribe((status, err) => {
-        if (status === 'CHANNEL_ERROR') {
-          console.error('[Player] Realtime channel error:', err)
-        } else {
-          console.log('[Player] Realtime status:', status)
-        }
-      })
-
-    return () => supabase.removeChannel(sub)
-  }, [roomId, session?.user?.id])
-
-  const fetchInitialData = async () => {
-    const { data: p } = await supabase
-      .from('players').select('*')
-      .eq('room_id', roomId).eq('user_id', session.user.id).single()
-
-    if (!p) {
-      alert('You are not part of this room!')
-      navigate('/')
-      return
-    }
-    setPlayer(p)
-
-    // BUG 2 FIX: Actually fetch the room data before checking rError or r
-    const { data: r, error: rError } = await supabase
-      .from('rooms').select('*').eq('id', roomId).single()
-
-    if (rError || !r) {
-      console.error('[Player] Error fetching room:', rError)
-      alert("Error loading game data")
-      return
-    }
-    setRoom(r)
-
-    if (r.status === 'playing' || r.status === 'revealing') {
-      // Check if already answered current question
-      const { data: a, error: aError } = await supabase.from('answers').select('*')
-        .eq('room_id', roomId)
-        .eq('player_id', p.id)
-        .eq('question_index', r.current_question_index)
-        .maybeSingle()
-
-      if (aError) console.error('[Player] Error fetching initial answer:', aError)
-      
-      if (a) {
-        setSelectedChoice(a.selected_choice)
-        setAnswerLocked(true)
-        if (r.status === 'revealing') {
-          setRevealedResult({ is_correct: a.is_correct, is_first_correct: a.is_first_correct })
-        }
+      // New question started
+      if (prevQuestionIndexRef.current !== null &&
+          data.current_question_index !== prevQuestionIndexRef.current) {
+        resetForNewQuestion()
       }
+
+      // Host revealed answers
+      if (data.status === 'revealing' && prevStatusRef.current !== 'revealing') {
+        fetchMyAnswerResult(data.current_question_index, userId)
+      }
+
+      if (data.status === 'finished') {
+        confetti({ particleCount: 200, spread: 120, origin: { y: 0.5 } })
+      }
+
+      prevQuestionIndexRef.current = data.current_question_index
+      prevStatusRef.current = data.status
+      setRoom(data)
+    })
+
+    return () => unsubRoom()
+  }, [roomId, session])
+
+  // ── Subscribe to my player ────────────────────────────────────────────────
+  useEffect(() => {
+    if (!session) return
+    const userId = session.uid
+
+    const playerRef = ref(rtdb, `rooms/${roomId}/players/${userId}`)
+    const unsubPlayer = onValue(playerRef, (snap) => {
+      if (snap.exists()) {
+        setPlayer(snap.val())
+      }
+    })
+
+    // Initial check - verify player is in the room
+    get(ref(rtdb, `rooms/${roomId}/players/${userId}`)).then(snap => {
+      if (!snap.exists()) {
+        alert('You are not part of this room!')
+        navigate('/')
+      } else {
+        setPlayer(snap.val())
+        questionServerStartRef.current = Date.now() + clockOffset.current
+      }
+    })
+
+    return () => unsubPlayer()
+  }, [roomId, session])
+
+  // ── Load existing answer if rejoining mid-game ────────────────────────────
+  useEffect(() => {
+    if (!session || !room) return
+    const userId = session.uid
+
+    if (room.status === 'playing' || room.status === 'revealing') {
+      const qIdx = room.current_question_index
+      get(ref(rtdb, `rooms/${roomId}/answers/${qIdx}/${userId}`)).then(snap => {
+        if (snap.exists()) {
+          const a = snap.val()
+          setSelectedChoice(a.selected_choice)
+          setAnswerLocked(true)
+          if (room.status === 'revealing') {
+            setRevealedResult({ is_correct: a.is_correct, is_first_correct: a.is_first_correct })
+          }
+        }
+      })
     }
+  }, [room?.status, room?.current_question_index])
 
-    // Record server-corrected question start time
-    questionServerStartRef.current = Date.now() + clockOffset.current
-  }
-
-  const fetchMyAnswerResult = async (questionIndex) => {
-    const { data: myPlayer } = await supabase
-      .from('players').select('id')
-      .eq('room_id', roomId).eq('user_id', session.user.id).single()
-
-    if (!myPlayer) return
-
-    const { data: a, error } = await supabase.from('answers').select('is_correct, is_first_correct')
-      .eq('room_id', roomId)
-      .eq('player_id', myPlayer.id)
-      .eq('question_index', questionIndex)
-      .maybeSingle()
-
-    if (error) {
-      console.error('[Player] Error fetching answer result:', error)
-      return
-    }
-
-    if (a) {
+  // ── Fetch my answer result after reveal ───────────────────────────────────
+  const fetchMyAnswerResult = async (questionIndex, userId) => {
+    const snap = await get(ref(rtdb, `rooms/${roomId}/answers/${questionIndex}/${userId}`))
+    if (snap.exists()) {
+      const a = snap.val()
       setRevealedResult({ is_correct: a.is_correct, is_first_correct: a.is_first_correct })
-      if (a.is_correct) {
-        confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 } })
-      }
+      if (a.is_correct) confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 } })
     } else {
-      // Player didn't answer → show "time's up / didn't answer"
       setRevealedResult({ is_correct: false, is_first_correct: false, didNotAnswer: true })
     }
   }
 
+  // ── Submit answer ─────────────────────────────────────────────────────────
   const handleChoiceClick = async (choiceIndex) => {
-    if (answerLocked) return   // already picked
+    if (answerLocked || !room || !session) return
 
-    // Fair reaction time: (server-corrected click time) - (server-corrected question-shown time)
     const serverClickTime = Date.now() + clockOffset.current
     const reactionMs = questionServerStartRef.current
       ? Math.round(serverClickTime - questionServerStartRef.current)
       : 5000
 
-    // Optimistic UI: lock the choice immediately so it feels instant
+    // Optimistic UI
     setSelectedChoice(choiceIndex)
     setAnswerLocked(true)
 
-    const { data, error } = await supabase.rpc('submit_answer', {
-      p_room_id: roomId,
-      p_player_id: player.id,
-      p_question_index: room.current_question_index,
-      p_selected_choice: choiceIndex,
-      p_reaction_time_ms: reactionMs
+    const userId = session.uid
+    const qIdx = room.current_question_index
+    const correctChoice = room.questions.questions[qIdx].correct
+    const isCorrect = choiceIndex === correctChoice
+
+    const answerRef = ref(rtdb, `rooms/${roomId}/answers/${qIdx}/${userId}`)
+
+    // Use transaction to prevent ghost answers (atomic write-once)
+    const result = await runTransaction(answerRef, (current) => {
+      if (current !== null) {
+        // Already answered - abort transaction
+        return undefined
+      }
+      return {
+        user_id: userId,
+        player_name: player?.nickname || 'Unknown',
+        selected_choice: choiceIndex,
+        is_correct: isCorrect,
+        is_first_correct: false,  // Host calculates this during reveal
+        reaction_time_ms: reactionMs,
+        submitted_at: Date.now()
+      }
     })
 
-    if (error) {
-      console.error('[Game] submit_answer failed:', error)
-      setAnswerLocked(false)
-      setSelectedChoice(null)
-    } else if (data?.error && data.error !== 'already_answered') {
-      console.error('[Game] submit_answer returned:', data.error)
-      setAnswerLocked(false)
-      setSelectedChoice(null)
+    if (!result.committed) {
+      // Already answered - restore locked state (already locked, no change needed)
+      console.log('[Player] Answer already submitted')
     }
   }
-
-  useEffect(() => {
-    if (room?.status === 'finished') {
-      confetti({ particleCount: 200, spread: 120, origin: { y: 0.5 } })
-    }
-  }, [room?.status])
 
   if (!room || !player) return (
     <div className="flex h-screen items-center justify-center bg-background">
@@ -230,11 +202,10 @@ export default function PlayerGameView() {
           </div>
         )}
 
-        {/* PLAYING — show question */}
+        {/* PLAYING */}
         {room.status === 'playing' && currentQuestion && (
           <div className="max-w-4xl w-full">
             {!answerLocked ? (
-              // Question + choices
               <div className="animate-in fade-in zoom-in duration-300">
                 <div className="text-center mb-8">
                   <span className="text-primary font-bold text-sm tracking-widest uppercase mb-2 block">
@@ -242,7 +213,6 @@ export default function PlayerGameView() {
                   </span>
                   <h2 className="text-3xl md:text-5xl font-bold leading-tight">{currentQuestion.question}</h2>
                 </div>
-
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-12">
                   {currentQuestion.choices.map((choice, idx) => (
                     <button
@@ -257,7 +227,6 @@ export default function PlayerGameView() {
                 </div>
               </div>
             ) : (
-              // Answer locked — waiting for host to reveal
               <div className="max-w-4xl w-full animate-in fade-in zoom-in duration-300">
                 <div className="text-center mb-8">
                   <span className="text-primary font-bold text-sm tracking-widest uppercase mb-2 block">
@@ -265,30 +234,21 @@ export default function PlayerGameView() {
                   </span>
                   <h2 className="text-2xl md:text-3xl font-bold leading-tight text-gray-300">{currentQuestion.question}</h2>
                 </div>
-
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
                   {currentQuestion.choices.map((choice, idx) => {
                     const isPicked = idx === selectedChoice
                     return (
-                      <div
-                        key={idx}
-                        className={`relative p-6 rounded-2xl border-2 transition-all ${
-                          isPicked
-                            ? 'border-primary bg-primary/20 scale-[1.02] shadow-[0_0_20px_rgba(0,255,255,0.3)]'
-                            : 'border-gray-700 bg-gray-800 opacity-40'
-                        }`}
-                      >
+                      <div key={idx} className={`relative p-6 rounded-2xl border-2 transition-all ${
+                        isPicked
+                          ? 'border-primary bg-primary/20 scale-[1.02] shadow-[0_0_20px_rgba(0,255,255,0.3)]'
+                          : 'border-gray-700 bg-gray-800 opacity-40'
+                      }`}>
                         <span className="text-xl font-medium">{choice}</span>
-                        {isPicked && (
-                          <div className="absolute top-2 right-2 text-primary">
-                            <Zap size={16} fill="currentColor" />
-                          </div>
-                        )}
+                        {isPicked && <div className="absolute top-2 right-2 text-primary"><Zap size={16} fill="currentColor" /></div>}
                       </div>
                     )
                   })}
                 </div>
-
                 <div className="mt-8 text-center">
                   <div className="inline-flex items-center gap-3 bg-gray-900 border border-gray-700 px-6 py-3 rounded-full">
                     <div className="w-2 h-2 bg-primary rounded-full animate-pulse" />
@@ -300,29 +260,24 @@ export default function PlayerGameView() {
           </div>
         )}
 
-        {/* REVEALING — host revealed, show result */}
+        {/* REVEALING */}
         {room.status === 'revealing' && currentQuestion && (
           <div className="max-w-4xl w-full animate-in fade-in zoom-in duration-500">
             <div className="text-center mb-8">
               <h2 className="text-2xl font-bold text-gray-400">{currentQuestion.question}</h2>
             </div>
-
-            {/* Show choices with correct highlighted */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
               {currentQuestion.choices.map((choice, idx) => {
                 const isCorrect = idx === currentQuestion.correct
                 const isPicked = idx === selectedChoice
                 return (
-                  <div
-                    key={idx}
-                    className={`relative p-6 rounded-2xl border-2 transition-all ${
-                      isCorrect
-                        ? 'border-primary bg-primary/20 shadow-[0_0_20px_rgba(0,255,255,0.2)]'
-                        : isPicked
-                          ? 'border-red-500 bg-red-500/20'
-                          : 'border-gray-700 bg-gray-800 opacity-30'
-                    }`}
-                  >
+                  <div key={idx} className={`relative p-6 rounded-2xl border-2 transition-all ${
+                    isCorrect
+                      ? 'border-primary bg-primary/20 shadow-[0_0_20px_rgba(0,255,255,0.2)]'
+                      : isPicked
+                        ? 'border-red-500 bg-red-500/20'
+                        : 'border-gray-700 bg-gray-800 opacity-30'
+                  }`}>
                     <div className="flex items-center justify-between">
                       <span className="text-xl font-medium">{choice}</span>
                       {isCorrect && <CheckCircle2 className="text-primary" size={24} />}
@@ -333,14 +288,11 @@ export default function PlayerGameView() {
               })}
             </div>
 
-            {/* Personal result card */}
             {revealedResult ? (
               <div className={`text-center p-8 rounded-3xl border backdrop-blur-md ${
-                revealedResult.didNotAnswer
-                  ? 'bg-gray-900/80 border-gray-700'
-                  : revealedResult.is_correct
-                    ? 'bg-primary/10 border-primary shadow-[0_0_40px_rgba(0,255,255,0.15)]'
-                    : 'bg-red-900/20 border-red-700'
+                revealedResult.didNotAnswer ? 'bg-gray-900/80 border-gray-700'
+                  : revealedResult.is_correct ? 'bg-primary/10 border-primary shadow-[0_0_40px_rgba(0,255,255,0.15)]'
+                  : 'bg-red-900/20 border-red-700'
               }`}>
                 {revealedResult.didNotAnswer ? (
                   <>

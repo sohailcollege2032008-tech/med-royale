@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react'
-import { supabase } from '../../lib/supabase'
+import { collection, query, where, getDocs, deleteDoc, doc, addDoc, serverTimestamp } from 'firebase/firestore'
+import { ref, set, get } from 'firebase/database'
+import { db, rtdb } from '../../lib/firebase'
 import { useAuthStore } from '../../stores/authStore'
 import { Link, useNavigate } from 'react-router-dom'
 import UploadQuestionsModal from '../../components/host/UploadQuestionsModal'
@@ -13,21 +15,24 @@ export default function HostDashboard() {
   const [deletingId, setDeletingId] = useState(null)
 
   useEffect(() => {
-    fetchBanks()
-  }, [])
+    if (profile) fetchBanks()
+  }, [profile])
 
   const fetchBanks = async () => {
     setLoading(true)
-    const { data, error } = await supabase
-      .from('question_sets')
-      .select('*')
-      .order('created_at', { ascending: false })
-
-    if (error) {
-      console.error('Error fetching question banks:', error)
-      alert('خطأ في تحميل بنوك الأسئلة: ' + error.message)
-    } else {
-      setBanks(data || [])
+    try {
+      const q = query(
+        collection(db, 'question_sets'),
+        where('host_id', '==', profile.id)
+      )
+      const snap = await getDocs(q)
+      const data = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => (b.created_at?.seconds || 0) - (a.created_at?.seconds || 0))
+      setBanks(data)
+    } catch (err) {
+      console.error('Error fetching question banks:', err)
+      alert('خطأ في تحميل بنوك الأسئلة: ' + err.message)
     }
     setLoading(false)
   }
@@ -35,58 +40,66 @@ export default function HostDashboard() {
   const handleDelete = async (id) => {
     if (!window.confirm('حذف بنك الأسئلة ده؟ مش هترجعه.')) return
     setDeletingId(id)
-    const { error } = await supabase.from('question_sets').delete().eq('id', id)
-    if (error) alert('خطأ في الحذف: ' + error.message)
-    else setBanks(prev => prev.filter(b => b.id !== id))
+    try {
+      await deleteDoc(doc(db, 'question_sets', id))
+      setBanks(prev => prev.filter(b => b.id !== id))
+    } catch (err) {
+      alert('خطأ في الحذف: ' + err.message)
+    }
     setDeletingId(null)
   }
 
   const handleStartGame = async (bank) => {
     if (!profile) return
-    
+
     let attempts = 0
     const MAX_ATTEMPTS = 5
-    let success = false
-    let lastError = null
 
-    while (attempts < MAX_ATTEMPTS && !success) {
+    while (attempts < MAX_ATTEMPTS) {
       const code = Math.random().toString(36).substring(2, 8).toUpperCase()
-      const { data, error } = await supabase.from('rooms').insert({
-        code,
-        host_id: profile.id,
-        question_set_id: bank.id,
-        title: bank.title + ' Room',
-        questions: bank.questions,
-        status: 'lobby'
-      }).select().single()
+      const roomRef = ref(rtdb, `rooms/${code}`)
 
-      if (!error) {
-        success = true
-        navigate(`/host/game/${data.id}`)
-      } else if (error.code === '23505') { // Unique violation
+      try {
+        // Check if room code already exists
+        const existing = await get(roomRef)
+        if (existing.exists()) {
+          attempts++
+          continue
+        }
+
+        // Create room in RTDB
+        await set(roomRef, {
+          code,
+          host_id: profile.id,
+          question_set_id: bank.id,
+          title: bank.title + ' Room',
+          questions: bank.questions,
+          status: 'lobby',
+          current_question_index: 0,
+          question_started_at: null,
+          reveal_data: null,
+          created_at: Date.now()
+        })
+
+        navigate(`/host/game/${code}`)
+        return
+      } catch (err) {
+        console.error('[Dashboard] Error creating room:', err)
         attempts++
-        lastError = error
-        console.warn(`[Dashboard] Room code collision (${code}), retrying... attempt ${attempts}`)
-      } else {
-        lastError = error
-        break // Other error (RLS, etc.)
       }
     }
 
-    if (!success) {
-      alert('Error creating room: ' + (lastError?.message || 'Failed after multiple attempts'))
-    }
+    alert('Error creating room after multiple attempts')
   }
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut()
+    useAuthStore.getState().signOut()
   }
 
   return (
     <div className="min-h-screen bg-background text-white p-8">
       <div className="max-w-5xl mx-auto space-y-8">
 
-        {/* Header */}
         <header className="flex justify-between items-center bg-gray-900/50 p-6 rounded-2xl border border-gray-800 backdrop-blur-sm">
           <div>
             <h1 className="text-3xl font-display font-bold text-primary">Host Dashboard</h1>
@@ -103,7 +116,6 @@ export default function HostDashboard() {
           </div>
         </header>
 
-        {/* Question Banks section */}
         <section className="bg-gray-900/50 p-6 rounded-2xl border border-gray-800 backdrop-blur-sm shadow-xl">
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-2xl font-bold font-display">My Question Banks</h2>
@@ -142,7 +154,9 @@ export default function HostDashboard() {
                       <span className="bg-gray-700/80 px-2 py-1 rounded-md">{bank.question_count} سؤال</span>
                       <span className="bg-gray-700/80 px-2 py-1 rounded-md uppercase">{bank.source_type}</span>
                       <span className="bg-gray-700/80 px-2 py-1 rounded-md">
-                        {new Date(bank.created_at).toLocaleDateString('ar-EG')}
+                        {bank.created_at?.seconds
+                          ? new Date(bank.created_at.seconds * 1000).toLocaleDateString('ar-EG')
+                          : '—'}
                       </span>
                     </div>
                   </div>
@@ -169,7 +183,6 @@ export default function HostDashboard() {
         </section>
       </div>
 
-      {/* Upload Modal */}
       {showUpload && (
         <UploadQuestionsModal
           onClose={() => setShowUpload(false)}

@@ -1,7 +1,9 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { supabase } from '../../lib/supabase'
+import { ref, get, set, update } from 'firebase/database'
+import { rtdb } from '../../lib/firebase'
 import { useAuth } from '../../hooks/useAuth'
+import { useAuthStore } from '../../stores/authStore'
 
 export default function JoinGame() {
   const { profile, session } = useAuth()
@@ -9,69 +11,56 @@ export default function JoinGame() {
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
 
-  const handleSignOut = async () => {
-    await supabase.auth.signOut()
-  }
+  const handleSignOut = () => useAuthStore.getState().signOut()
 
   const handleJoin = async (e) => {
     e.preventDefault()
     if (!code || code.length !== 6) return
     setLoading(true)
-    
-    // 1. Verify Room exists
-    const { data: room, error: roomError } = await supabase
-      .from('rooms')
-      .select('*')
-      .eq('code', code.toUpperCase())
-      .single()
 
-    if (roomError || !room) {
-      alert("Invalid Room Code")
-      setLoading(false)
-      return
-    }
+    const roomCode = code.toUpperCase()
 
-    // 2. Check for Existing Request
-    const { data: existing, error: checkError } = await supabase
-      .from('join_requests')
-      .select('*')
-      .eq('room_id', room.id)
-      .eq('player_id', session.user.id)
-      .maybeSingle()
-
-    if (existing) {
-      if (existing.status === 'rejected') {
-        // BUG 7 FIX: If previously rejected, "reset" to pending to allow re-evaluation
-        const { error: updateError } = await supabase
-          .from('join_requests')
-          .update({ status: 'pending', created_at: new Date().toISOString() })
-          .eq('id', existing.id)
-        
-        if (updateError) alert("Error re-joining: " + updateError.message)
-        else navigate(`/player/waiting/${room.id}`)
-      } else {
-        // Already pending or approved (though approved should usually navigate away)
-        navigate(`/player/waiting/${room.id}`)
+    try {
+      // 1. Verify room exists
+      const roomSnap = await get(ref(rtdb, `rooms/${roomCode}`))
+      if (!roomSnap.exists()) {
+        alert('Invalid Room Code')
+        setLoading(false)
+        return
       }
-    } else {
-      // 3. Submit New Join Request
-      const { error: insertError } = await supabase
-        .from('join_requests')
-        .insert({
-          room_id: room.id,
-          player_id: session.user.id,
+
+      const userId = session.uid
+
+      // 2. Check for existing request
+      const existingSnap = await get(ref(rtdb, `rooms/${roomCode}/join_requests/${userId}`))
+
+      if (existingSnap.exists()) {
+        const existing = existingSnap.val()
+        if (existing.status === 'rejected') {
+          // Reset to pending to allow re-joining
+          await update(ref(rtdb, `rooms/${roomCode}/join_requests/${userId}`), {
+            status: 'pending',
+            created_at: Date.now()
+          })
+        }
+        // Either way, go to waiting room
+        navigate(`/player/waiting/${roomCode}`)
+      } else {
+        // 3. Submit new join request
+        await set(ref(rtdb, `rooms/${roomCode}/join_requests/${userId}`), {
+          player_id: userId,
           player_email: profile.email,
-          player_name: profile.display_name,
-          player_avatar: profile.avatar_url,
-          status: 'pending'
+          player_name: profile.display_name || profile.email,
+          player_avatar: profile.avatar_url || null,
+          status: 'pending',
+          created_at: Date.now()
         })
-
-      if (insertError) {
-        alert("Error joining: " + insertError.message)
-      } else {
-        navigate(`/player/waiting/${room.id}`)
+        navigate(`/player/waiting/${roomCode}`)
       }
+    } catch (err) {
+      alert('Error joining: ' + err.message)
     }
+
     setLoading(false)
   }
 

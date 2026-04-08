@@ -1,11 +1,11 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { supabase } from '../../lib/supabase'
+import { ref, onValue, update, get, set, remove } from 'firebase/database'
+import { rtdb } from '../../lib/firebase'
 import { useAuth } from '../../hooks/useAuth'
 import { Play, UserCheck, XCircle, CheckCircle, SkipForward, Trophy, Eye, Timer, Loader2 } from 'lucide-react'
 import confetti from 'canvas-confetti'
 
-// ─── Optional countdown timer (visual only – host controls pacing) ────────────
 function QuestionTimer({ started, duration }) {
   const [elapsed, setElapsed] = useState(0)
   const rafRef = useRef(null)
@@ -22,11 +22,6 @@ function QuestionTimer({ started, duration }) {
     rafRef.current = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(rafRef.current)
   }, [started, duration])
-
-  useEffect(() => {
-    // Initial fetch for everything
-    fetchInitialData()
-  }, [])
 
   const remaining = Math.max(0, duration - elapsed)
   const pct = ((duration - remaining) / duration) * 100
@@ -49,7 +44,7 @@ function QuestionTimer({ started, duration }) {
 }
 
 export default function HostGameRoom() {
-  const { roomId } = useParams()
+  const { roomId } = useParams()   // roomId = room code (e.g. "A1B2C3")
   const { session } = useAuth()
   const navigate = useNavigate()
 
@@ -57,204 +52,212 @@ export default function HostGameRoom() {
   const [requests, setRequests] = useState([])
   const [players, setPlayers] = useState([])
   const [answers, setAnswers] = useState([])
-  const [revealResult, setRevealResult] = useState(null)   // winner info from reveal RPC
+  const [revealResult, setRevealResult] = useState(null)
   const [isRevealing, setIsRevealing] = useState(false)
   const [timerKey, setTimerKey] = useState(0)
   const [showTimer, setShowTimer] = useState(false)
   const [processingRequests, setProcessingRequests] = useState(new Set())
 
+  // ── Subscribe to room data ────────────────────────────────────────────────
   useEffect(() => {
     if (!session) return
 
-    // Explicitly set Realtime auth token to ensure RLS evaluates with the correct user
-    supabase.realtime.setAuth(session.access_token)
-
-    const sub = supabase.channel(`host_room_${roomId}_${Date.now()}`)
-      // Join requests: push payload directly (no fetch!)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'join_requests', filter: `room_id=eq.${roomId}` }, (payload) => {
-        setRequests(prev => [...prev, payload.new])
-      })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'join_requests', filter: `room_id=eq.${roomId}` }, () => {
-        fetchRequests() 
-      })
-      // Players: push/update locally
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'players', filter: `room_id=eq.${roomId}` }, (payload) => {
-        setPlayers(prev => {
-          if (prev.some(p => p.id === payload.new.id)) return prev
-          return [...prev, payload.new].sort((a, b) => b.score - a.score)
-        })
-      })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'players', filter: `room_id=eq.${roomId}` }, (payload) => {
-        setPlayers(prev =>
-          prev.map(p => p.id === payload.new.id ? { ...p, ...payload.new } : p)
-            .sort((a, b) => b.score - a.score)
-        )
-      })
-      // Answers: push payload directly 
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'answers', filter: `room_id=eq.${roomId}` }, (payload) => {
-        setAnswers(prev => [...prev, payload.new])
-      })
-      // Room updates: merge 
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` }, (payload) => {
-        setRoom(prev => ({ ...prev, ...payload.new }))
-      })
-      .subscribe((status, err) => {
-        if (status === 'CHANNEL_ERROR') {
-          console.error('[Host] Realtime channel error:', err)
-        } else {
-          console.log('[Host] Realtime status:', status)
+    const roomRef = ref(rtdb, `rooms/${roomId}`)
+    const unsubRoom = onValue(roomRef, (snap) => {
+      if (!snap.exists()) return
+      const data = snap.val()
+      setRoom(prev => {
+        // Reset answers and timer when question changes
+        if (prev && data.current_question_index !== prev.current_question_index) {
+          setAnswers([])
+          setRevealResult(null)
+          setTimerKey(k => k + 1)
         }
+        if (data.status === 'finished' && prev?.status !== 'finished') {
+          confetti({ particleCount: 150, spread: 90, origin: { y: 0.6 } })
+        }
+        return data
       })
+    })
 
-    return () => supabase.removeChannel(sub)
+    return () => unsubRoom()
   }, [roomId, session])
 
-  const fetchInitialData = async () => {
-    const { data: roomData, error } = await supabase.from('rooms').select('*').eq('id', roomId).single()
-    if (error) {
-      console.error('[Host] Error fetching room:', error)
-      alert('Error loading room: ' + error.message)
-      return
-    }
-    setRoom(roomData)
-    fetchRequests()
-    fetchPlayers()
-    fetchAnswers(roomData)
-  }
-
-  const fetchRequests = async () => {
-    const { data, error } = await supabase.from('join_requests').select('*').eq('room_id', roomId).eq('status', 'pending')
-    if (error) console.error('[Host] Error fetching requests:', error)
-    else setRequests(data || [])
-  }
-
-  const fetchPlayers = async () => {
-    const { data, error } = await supabase.from('players').select('*').eq('room_id', roomId).order('score', { ascending: false })
-    if (error) console.error('[Host] Error fetching players:', error)
-    else setPlayers(data || [])
-  }
-
-  const fetchAnswers = async (currentRoom) => {
-    const r = currentRoom || room
-    if (!r || r.current_question_index < 0) return
-    const { data, error } = await supabase.from('answers').select('*')
-      .eq('room_id', roomId).eq('question_index', r.current_question_index)
-    if (error) console.error('[Host] Error fetching answers:', error)
-    else setAnswers(data || [])
-  }
-
-  // Reset answers on question change
+  // ── Subscribe to join requests ────────────────────────────────────────────
   useEffect(() => {
-    if (room?.status === 'playing') {
-      fetchAnswers() // Fetch to catch rapid answers instead of just emptying
-      setRevealResult(null)
-      setTimerKey(k => k + 1)
-    }
-  }, [room?.current_question_index, room?.status])
+    if (!session) return
 
+    const reqRef = ref(rtdb, `rooms/${roomId}/join_requests`)
+    const unsubReq = onValue(reqRef, (snap) => {
+      if (!snap.exists()) { setRequests([]); return }
+      const all = Object.entries(snap.val()).map(([key, val]) => ({ key, ...val }))
+      setRequests(all.filter(r => r.status === 'pending'))
+    })
+
+    return () => unsubReq()
+  }, [roomId, session])
+
+  // ── Subscribe to players ──────────────────────────────────────────────────
   useEffect(() => {
-    if (room?.status === 'finished') {
-      confetti({ particleCount: 150, spread: 90, origin: { y: 0.6 } })
-      fetchPlayers()
-    }
-  }, [room?.status])
+    if (!session) return
 
-  const handleRequest = async (requestId, action) => {
-    const currentRequest = requests.find(r => r.id === requestId)
-    if (!currentRequest) return
+    const playersRef = ref(rtdb, `rooms/${roomId}/players`)
+    const unsubPlayers = onValue(playersRef, (snap) => {
+      if (!snap.exists()) { setPlayers([]); return }
+      const list = Object.values(snap.val()).sort((a, b) => b.score - a.score)
+      setPlayers(list)
+    })
 
-    setProcessingRequests(prev => new Set(prev).add(requestId))
+    return () => unsubPlayers()
+  }, [roomId, session])
+
+  // ── Subscribe to answers for current question ─────────────────────────────
+  useEffect(() => {
+    if (!session || !room?.current_question_index === undefined) return
+
+    const qIdx = room?.current_question_index ?? 0
+    const answersRef = ref(rtdb, `rooms/${roomId}/answers/${qIdx}`)
+    const unsubAnswers = onValue(answersRef, (snap) => {
+      if (!snap.exists()) { setAnswers([]); return }
+      setAnswers(Object.values(snap.val()))
+    })
+
+    return () => unsubAnswers()
+  }, [roomId, session, room?.current_question_index])
+
+  // ── Handle join request ───────────────────────────────────────────────────
+  const handleRequest = async (reqKey, action) => {
+    setProcessingRequests(prev => new Set(prev).add(reqKey))
 
     try {
-      const { data, error } = await supabase.rpc('process_join_request', {
-        p_request_id: requestId,
-        p_action: action
-      })
+      if (action === 'approved') {
+        // Get the request data
+        const reqSnap = await get(ref(rtdb, `rooms/${roomId}/join_requests/${reqKey}`))
+        if (!reqSnap.exists()) return
+        const reqData = reqSnap.val()
 
-      if (error || (data && data.success === false)) {
-        const errorMsg = error?.message || data?.error || 'Unknown error'
-        console.error('[Host] Join request failed:', errorMsg)
-        alert(`❌ Failed to ${action} ${currentRequest.player_name}: ${errorMsg}`)
-      } else if (action === 'approved') {
-        // Fallback: fetch players immediately in case realtime misses the INSERT
-        await fetchPlayers()
-        await fetchRequests()
-      } else if (action === 'rejected') {
-        await fetchRequests()
+        // Add player and update request status atomically
+        await update(ref(rtdb), {
+          [`rooms/${roomId}/join_requests/${reqKey}/status`]: 'approved',
+          [`rooms/${roomId}/players/${reqKey}`]: {
+            user_id: reqKey,
+            nickname: reqData.player_name,
+            avatar_url: reqData.player_avatar || null,
+            score: 0,
+            joined_at: Date.now()
+          }
+        })
+      } else {
+        await update(ref(rtdb, `rooms/${roomId}/join_requests/${reqKey}`), {
+          status: 'rejected'
+        })
       }
     } catch (err) {
-      console.error('[Host] Join request exception:', err)
-      alert(`❌ Error processing request: ${err.message}`)
+      console.error('[Host] handleRequest error:', err)
+      alert('Error processing request: ' + err.message)
     } finally {
       setProcessingRequests(prev => {
         const next = new Set(prev)
-        next.delete(requestId)
+        next.delete(reqKey)
         return next
       })
     }
   }
 
+  // ── Start game ────────────────────────────────────────────────────────────
   const startGame = async () => {
-    const { error } = await supabase.from('rooms').update({
-      status: 'playing',
-      current_question_index: 0,
-      question_started_at: new Date().toISOString()
-    }).eq('id', roomId)
-
-    if (error) {
-      console.error('[Host] Error starting game:', error)
-      alert('Failed to start game: ' + error.message)
-    } else {
+    try {
+      await update(ref(rtdb, `rooms/${roomId}`), {
+        status: 'playing',
+        current_question_index: 0,
+        question_started_at: Date.now()
+      })
       setTimerKey(k => k + 1)
+    } catch (err) {
+      alert('Failed to start game: ' + err.message)
     }
   }
 
+  // ── Reveal answer ─────────────────────────────────────────────────────────
   const revealAnswer = async () => {
     setIsRevealing(true)
     try {
-      const { data, error } = await supabase.rpc('reveal_answer', {
-        p_room_id: roomId,
-        p_question_index: room.current_question_index
-      })
-      if (error) {
-        console.error('[Host] Error revealing answer:', error)
-        alert('Failed to reveal answer: ' + error.message)
-      } else {
-        await fetchPlayers()
-        setRevealResult(data)
+      const qIdx = room.current_question_index
+      const correctChoice = room.questions.questions[qIdx].correct
+
+      // Get all answers for this question
+      const answersSnap = await get(ref(rtdb, `rooms/${roomId}/answers/${qIdx}`))
+      const answersData = answersSnap.exists() ? Object.values(answersSnap.val()) : []
+
+      // Find fastest correct answer
+      const correctAnswers = answersData
+        .filter(a => a.selected_choice === correctChoice)
+        .sort((a, b) => a.reaction_time_ms - b.reaction_time_ms)
+
+      const winner = correctAnswers[0] || null
+
+      // Build score updates: +1 per correct, +1 bonus for fastest
+      const scoreUpdates = {}
+      for (const answer of answersData) {
+        if (answer.selected_choice === correctChoice) {
+          const isFirst = winner && answer.user_id === winner.user_id
+          const bonus = isFirst ? 1 : 0
+          const playerRef = `rooms/${roomId}/players/${answer.user_id}/score`
+          const playerSnap = await get(ref(rtdb, playerRef))
+          scoreUpdates[playerRef] = (playerSnap.val() || 0) + 1 + bonus
+        }
       }
+
+      // Store winner info in room for display
+      const revealData = winner
+        ? { winner_nickname: winner.player_name, winner_time_ms: winner.reaction_time_ms }
+        : { winner_nickname: null, winner_time_ms: null }
+
+      await update(ref(rtdb), {
+        ...scoreUpdates,
+        [`rooms/${roomId}/status`]: 'revealing',
+        [`rooms/${roomId}/reveal_data`]: revealData
+      })
+
+      setRevealResult(revealData)
     } catch (err) {
-      console.error('[Host] revealAnswer exception:', err)
+      console.error('[Host] revealAnswer error:', err)
+      alert('Failed to reveal answer: ' + err.message)
     } finally {
       setIsRevealing(false)
     }
   }
 
+  // ── Next question ─────────────────────────────────────────────────────────
   const nextQuestion = async () => {
     if (!room?.questions?.questions) return
     const total = room.questions.questions.length
     const isFinished = room.current_question_index + 1 >= total
 
-    if (isFinished) {
-      const { error } = await supabase.from('rooms').update({ status: 'finished' }).eq('id', roomId)
-      if (error) {
-        console.error('[Host] Error finishing game:', error)
-        alert('Failed to finish game: ' + error.message)
+    try {
+      if (isFinished) {
+        await update(ref(rtdb, `rooms/${roomId}`), { status: 'finished' })
+      } else {
+        const nextIdx = room.current_question_index + 1
+        await update(ref(rtdb, `rooms/${roomId}`), {
+          status: 'playing',
+          current_question_index: nextIdx,
+          question_started_at: Date.now(),
+          reveal_data: null
+        })
       }
-    } else {
-      const { error } = await supabase.rpc('start_next_question', {
-        p_room_id: roomId,
-        p_next_question_index: room.current_question_index + 1
-      })
-      if (error) {
-        console.error('[Host] Error starting next question:', error)
-        alert('Failed to advance: ' + error.message)
-      }
+      setRevealResult(null)
+    } catch (err) {
+      alert('Failed to advance: ' + err.message)
     }
-    setRevealResult(null)
   }
 
-  if (!room) return <div className="text-white p-6 flex items-center gap-3"><div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" /> Loading Room...</div>
+  if (!room) return (
+    <div className="text-white p-6 flex items-center gap-3">
+      <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+      Loading Room...
+    </div>
+  )
 
   const currentQuestion = room.questions?.questions?.[room.current_question_index]
   const isRevealing_ = room.status === 'revealing'
@@ -269,21 +272,22 @@ export default function HostGameRoom() {
         <div className="flex items-center justify-between bg-gray-900/50 p-6 rounded-2xl border border-gray-800">
           <div>
             <h1 className="text-4xl font-display font-bold text-white mb-2">{room.title}</h1>
-            <p className="text-xl text-primary font-mono tracking-widest">JOIN CODE: {room.code}</p>
+            <p className="text-xl text-primary font-mono tracking-widest">JOIN CODE: {roomId}</p>
           </div>
           <div className="text-right">
             <div className="text-2xl font-bold">{totalPlayers} Players</div>
-            <div className={`capitalize px-4 py-1 rounded-full inline-block mt-2 text-sm font-bold ${room.status === 'playing' ? 'bg-green-500/20 text-green-400' :
-                room.status === 'revealing' ? 'bg-yellow-500/20 text-yellow-400' :
-                  room.status === 'finished' ? 'bg-primary/20 text-primary' :
-                    'bg-gray-800 text-gray-400'
-              }`}>
+            <div className={`capitalize px-4 py-1 rounded-full inline-block mt-2 text-sm font-bold ${
+              room.status === 'playing' ? 'bg-green-500/20 text-green-400' :
+              room.status === 'revealing' ? 'bg-yellow-500/20 text-yellow-400' :
+              room.status === 'finished' ? 'bg-primary/20 text-primary' :
+              'bg-gray-800 text-gray-400'
+            }`}>
               {room.status}
             </div>
           </div>
         </div>
 
-        {/* ─── LOBBY ─────────────────────────────────────────────────────── */}
+        {/* ─── LOBBY ──────────────────────────────────────────────────────── */}
         {room.status === 'lobby' && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
             {/* Pending Requests */}
@@ -294,7 +298,7 @@ export default function HostGameRoom() {
               <div className="space-y-4 max-h-96 overflow-y-auto pr-2">
                 {requests.length === 0 && <p className="text-gray-500 italic">No pending requests...</p>}
                 {requests.map(req => (
-                  <div key={req.id} className="flex items-center justify-between p-4 bg-gray-800 rounded-xl border border-gray-700">
+                  <div key={req.key} className="flex items-center justify-between p-4 bg-gray-800 rounded-xl border border-gray-700">
                     <div>
                       <div className="font-bold flex items-center gap-2">
                         {req.player_avatar && <img src={req.player_avatar} alt="avatar" className="w-6 h-6 rounded-full" />}
@@ -303,20 +307,18 @@ export default function HostGameRoom() {
                       <div className="text-sm text-gray-400">{req.player_email}</div>
                     </div>
                     <div className="flex gap-2">
-                      {processingRequests.has(req.id) ? (
-                        <div className="p-2 text-primary animate-spin">
-                          <Loader2 size={20} />
-                        </div>
+                      {processingRequests.has(req.key) ? (
+                        <div className="p-2 text-primary animate-spin"><Loader2 size={20} /></div>
                       ) : (
                         <>
                           <button
-                            onClick={() => handleRequest(req.id, 'approved')}
+                            onClick={() => handleRequest(req.key, 'approved')}
                             className="bg-green-500/20 text-green-500 hover:bg-green-500/30 p-2 rounded-lg transition-colors"
                           >
                             <CheckCircle size={20} />
                           </button>
                           <button
-                            onClick={() => handleRequest(req.id, 'rejected')}
+                            onClick={() => handleRequest(req.key, 'rejected')}
                             className="bg-red-500/20 text-red-500 hover:bg-red-500/30 p-2 rounded-lg transition-colors"
                           >
                             <XCircle size={20} />
@@ -337,7 +339,7 @@ export default function HostGameRoom() {
               <div className="flex-1 grid grid-cols-2 gap-4 auto-rows-max overflow-y-auto pr-2 max-h-72">
                 {totalPlayers === 0 && <p className="text-gray-500 italic col-span-2">Waiting for approvals...</p>}
                 {players.map(p => (
-                  <div key={p.id} className="flex items-center gap-3 p-3 bg-gray-800 rounded-xl border border-gray-700">
+                  <div key={p.user_id} className="flex items-center gap-3 p-3 bg-gray-800 rounded-xl border border-gray-700">
                     {p.avatar_url
                       ? <img src={p.avatar_url} alt="avatar" className="w-8 h-8 rounded-full" />
                       : <div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center"><UserCheck size={16} /></div>
@@ -346,7 +348,6 @@ export default function HostGameRoom() {
                   </div>
                 ))}
               </div>
-
               <button
                 onClick={startGame}
                 disabled={totalPlayers === 0}
@@ -358,19 +359,16 @@ export default function HostGameRoom() {
           </div>
         )}
 
-        {/* ─── PLAYING & REVEALING ───────────────────────────────────────── */}
+        {/* ─── PLAYING & REVEALING ────────────────────────────────────────── */}
         {(room.status === 'playing' || room.status === 'revealing') && !currentQuestion && (
           <div className="bg-gray-900/50 p-12 rounded-2xl border border-gray-800 text-center animate-pulse">
             <h2 className="text-2xl font-bold text-gray-400">Preparing first question...</h2>
-            <p className="text-gray-500 mt-2">The game is about to begin.</p>
           </div>
         )}
 
         {(room.status === 'playing' || room.status === 'revealing') && currentQuestion && (
           <div className="space-y-6">
-            {/* Question card */}
             <div className="bg-gray-900/50 p-8 rounded-2xl border border-primary relative overflow-hidden">
-              {/* Progress bar */}
               <div className="absolute top-0 left-0 w-full h-1 bg-gray-800">
                 <div className="h-full bg-primary transition-all" style={{ width: `${((room.current_question_index + 1) / room.questions.questions.length) * 100}%` }} />
               </div>
@@ -382,7 +380,6 @@ export default function HostGameRoom() {
                 </span>
               </div>
 
-              {/* Optional timer */}
               {showTimer && !isRevealing_ && (
                 <div className="mb-6">
                   <QuestionTimer key={timerKey} started={room.question_started_at} duration={currentQuestion.time_limit || 30} />
@@ -391,18 +388,18 @@ export default function HostGameRoom() {
 
               <h2 className="text-3xl font-bold mb-8">{currentQuestion.question}</h2>
 
-              {/* Choices */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {currentQuestion.choices.map((choice, i) => {
                   const isCorrect = i === currentQuestion.correct
                   const count = answers.filter(a => a.selected_choice === i).length
                   return (
-                    <div key={i} className={`p-4 rounded-xl border flex justify-between items-center transition-all ${isRevealing_
+                    <div key={i} className={`p-4 rounded-xl border flex justify-between items-center transition-all ${
+                      isRevealing_
                         ? isCorrect
                           ? 'border-primary bg-primary/10 shadow-[0_0_15px_rgba(0,255,255,0.2)]'
                           : 'border-gray-700 bg-gray-800 opacity-50'
                         : 'border-gray-700 bg-gray-800'
-                      }`}>
+                    }`}>
                       <span className={isRevealing_ && isCorrect ? 'font-bold text-primary' : ''}>{choice}</span>
                       <span className="font-mono text-xl font-bold">{count}</span>
                     </div>
@@ -410,7 +407,6 @@ export default function HostGameRoom() {
                 })}
               </div>
 
-              {/* Winner banner (after reveal) */}
               {isRevealing_ && revealResult?.winner_nickname && (
                 <div className="mt-6 flex items-center gap-3 bg-[#FFD700]/10 border border-[#FFD700]/40 text-[#FFD700] px-6 py-3 rounded-xl">
                   <Trophy size={20} />
@@ -422,9 +418,7 @@ export default function HostGameRoom() {
                 <div className="mt-6 text-gray-500 text-center text-sm">No one answered correctly this round.</div>
               )}
 
-              {/* Action buttons */}
               <div className="mt-8 flex items-center justify-between gap-4">
-                {/* Timer toggle */}
                 <button
                   onClick={() => setShowTimer(v => !v)}
                   className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-sm transition-all ${showTimer ? 'border-primary text-primary bg-primary/10' : 'border-gray-700 text-gray-500 hover:border-gray-600'}`}
@@ -433,7 +427,6 @@ export default function HostGameRoom() {
                 </button>
 
                 <div className="flex gap-3">
-                  {/* Reveal button — only when playing */}
                   {room.status === 'playing' && (
                     <button
                       onClick={revealAnswer}
@@ -443,8 +436,6 @@ export default function HostGameRoom() {
                       <Eye size={20} /> {isRevealing ? 'Revealing...' : 'Reveal Answer'}
                     </button>
                   )}
-
-                  {/* Next button — only after reveal */}
                   {room.status === 'revealing' && (
                     <button
                       onClick={nextQuestion}
@@ -464,7 +455,7 @@ export default function HostGameRoom() {
               </h3>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {players.slice(0, 3).map((p, idx) => (
-                  <div key={p.id} className="bg-gray-800 p-4 rounded-xl border border-gray-700 flex justify-between items-center">
+                  <div key={p.user_id} className="bg-gray-800 p-4 rounded-xl border border-gray-700 flex justify-between items-center">
                     <div className="flex items-center gap-3">
                       <span className="text-xl font-bold text-gray-500">#{idx + 1}</span>
                       <span className="font-bold">{p.nickname}</span>
@@ -477,7 +468,7 @@ export default function HostGameRoom() {
           </div>
         )}
 
-        {/* ─── FINISHED ──────────────────────────────────────────────────── */}
+        {/* ─── FINISHED ───────────────────────────────────────────────────── */}
         {room.status === 'finished' && (
           <div className="bg-gray-900/50 p-12 rounded-2xl border border-gray-800 text-center">
             <Trophy size={64} className="mx-auto text-[#FFD700] mb-6" />
@@ -485,7 +476,7 @@ export default function HostGameRoom() {
             <p className="text-xl text-gray-400 mb-12">Final Leaderboard</p>
             <div className="max-w-2xl mx-auto space-y-4">
               {players.map((p, idx) => (
-                <div key={p.id} className={`flex items-center justify-between p-4 rounded-xl border ${idx === 0 ? 'bg-primary/20 border-primary' : 'bg-gray-800 border-gray-700'}`}>
+                <div key={p.user_id} className={`flex items-center justify-between p-4 rounded-xl border ${idx === 0 ? 'bg-primary/20 border-primary' : 'bg-gray-800 border-gray-700'}`}>
                   <div className="flex items-center gap-4">
                     <span className={`text-2xl font-bold ${idx === 0 ? 'text-primary' : 'text-gray-500'}`}>#{idx + 1}</span>
                     {p.avatar_url
