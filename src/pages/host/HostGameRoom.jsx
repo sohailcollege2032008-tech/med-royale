@@ -1,21 +1,25 @@
-import React, { useEffect, useState, useRef } from 'react'
+import React, { useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ref, onValue, update, get, set, onDisconnect } from 'firebase/database'
 import { rtdb } from '../../lib/firebase'
 import { useAuth } from '../../hooks/useAuth'
-import { Play, UserCheck, XCircle, CheckCircle, SkipForward, Trophy, Eye, Timer, Loader2, WifiOff, Wifi, StopCircle } from 'lucide-react'
+import {
+  Play, UserCheck, XCircle, CheckCircle, SkipForward, Trophy,
+  Eye, Timer, Loader2, WifiOff, StopCircle, Shuffle, Star, Zap, Settings
+} from 'lucide-react'
 import confetti from 'canvas-confetti'
 
+// ── Timer bar ─────────────────────────────────────────────────────────────────
 function QuestionTimer({ started, duration }) {
   const [elapsed, setElapsed] = useState(0)
-  const rafRef = useRef(null)
-  const startRef = useRef(null)
+  const rafRef  = useRef(null)
+  const t0Ref   = useRef(performance.now())
 
   useEffect(() => {
-    startRef.current = performance.now()
+    t0Ref.current = performance.now()
     setElapsed(0)
     const tick = () => {
-      const diff = (performance.now() - startRef.current) / 1000
+      const diff = (performance.now() - t0Ref.current) / 1000
       setElapsed(diff)
       if (diff < duration) rafRef.current = requestAnimationFrame(tick)
     }
@@ -24,122 +28,242 @@ function QuestionTimer({ started, duration }) {
   }, [started, duration])
 
   const remaining = Math.max(0, duration - elapsed)
-  const pct = ((duration - remaining) / duration) * 100
-  const isUrgent = remaining < duration * 0.3
+  const pct       = ((duration - remaining) / duration) * 100
+  const urgent    = remaining < duration * 0.3
 
   return (
     <div className="flex items-center gap-3">
-      <Timer size={18} className={isUrgent ? 'text-red-400 animate-pulse' : 'text-gray-400'} />
+      <Timer size={18} className={urgent ? 'text-red-400 animate-pulse' : 'text-gray-400'} />
       <div className="flex-1 h-2 bg-gray-700 rounded-full overflow-hidden">
-        <div className={`h-full rounded-full transition-all ${isUrgent ? 'bg-red-400' : 'bg-primary'}`} style={{ width: `${pct}%` }} />
+        <div className={`h-full rounded-full transition-none ${urgent ? 'bg-red-400' : 'bg-primary'}`}
+          style={{ width: `${pct}%` }} />
       </div>
-      <span className={`font-mono font-bold w-8 text-right ${isUrgent ? 'text-red-400' : 'text-gray-300'}`}>
+      <span className={`font-mono font-bold w-8 text-right ${urgent ? 'text-red-400' : 'text-gray-300'}`}>
         {Math.ceil(remaining)}s
       </span>
     </div>
   )
 }
 
-export default function HostGameRoom() {
-  const { roomId } = useParams()
-  const { session } = useAuth()
-  const navigate = useNavigate()
+// ── Config panel ──────────────────────────────────────────────────────────────
+function GameConfigPanel({ config, onChange }) {
+  const set = (key, val) => onChange({ ...config, [key]: val })
 
-  const [room, setRoom] = useState(null)
+  return (
+    <div className="bg-gray-900/60 border border-gray-800 rounded-2xl p-5 space-y-5">
+      <h3 className="text-base font-bold text-white flex items-center gap-2">
+        <Settings size={16} className="text-primary" /> إعدادات الجيم
+      </h3>
+
+      {/* Shuffle toggle */}
+      <label className="flex items-center justify-between cursor-pointer select-none">
+        <div className="flex items-center gap-2">
+          <Shuffle size={15} className="text-gray-400" />
+          <span className="text-sm text-gray-200 font-medium">ترتيب الاختيارات عشوائي</span>
+        </div>
+        <button
+          onClick={() => set('shuffle_choices', !config.shuffle_choices)}
+          className={`relative w-11 h-6 rounded-full transition-colors ${config.shuffle_choices ? 'bg-primary' : 'bg-gray-700'}`}
+        >
+          <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${config.shuffle_choices ? 'translate-x-5' : ''}`} />
+        </button>
+      </label>
+
+      {/* Scoring mode */}
+      <div>
+        <p className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-3">نظام التقييم</p>
+        <div className="space-y-2">
+
+          {/* Classic */}
+          <label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${config.scoring_mode === 'classic' ? 'border-primary bg-primary/10' : 'border-gray-700 hover:border-gray-600'}`}>
+            <input type="radio" name="mode" className="hidden" checked={config.scoring_mode === 'classic'} onChange={() => set('scoring_mode', 'classic')} />
+            <div className={`w-4 h-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${config.scoring_mode === 'classic' ? 'border-primary' : 'border-gray-600'}`}>
+              {config.scoring_mode === 'classic' && <div className="w-2 h-2 bg-primary rounded-full" />}
+            </div>
+            <div>
+              <p className="text-sm font-bold text-white">كلاسيك</p>
+              <p className="text-xs text-gray-500">أول واحد صح ياخد نقطة، الباقي صفر</p>
+            </div>
+          </label>
+
+          {/* Custom */}
+          <label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${config.scoring_mode === 'custom' ? 'border-primary bg-primary/10' : 'border-gray-700 hover:border-gray-600'}`}>
+            <input type="radio" name="mode" className="hidden" checked={config.scoring_mode === 'custom'} onChange={() => set('scoring_mode', 'custom')} />
+            <div className={`w-4 h-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${config.scoring_mode === 'custom' ? 'border-primary' : 'border-gray-600'}`}>
+              {config.scoring_mode === 'custom' && <div className="w-2 h-2 bg-primary rounded-full" />}
+            </div>
+            <div>
+              <p className="text-sm font-bold text-white">كاستوم</p>
+              <p className="text-xs text-gray-500">أول واحد صح N نقطة، الباقي الصح M نقطة</p>
+            </div>
+          </label>
+
+          {config.scoring_mode === 'custom' && (
+            <div className="flex gap-4 px-3 pb-1">
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">أول واحد صح</label>
+                <div className="flex items-center gap-1">
+                  <input type="number" min={1} max={100} value={config.first_correct_points}
+                    onChange={e => set('first_correct_points', Math.max(1, Number(e.target.value)))}
+                    className="w-16 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-white text-sm focus:outline-none focus:border-primary" />
+                  <span className="text-xs text-gray-500">نقطة</span>
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">باقي الصح</label>
+                <div className="flex items-center gap-1">
+                  <input type="number" min={0} max={100} value={config.other_correct_points}
+                    onChange={e => set('other_correct_points', Math.max(0, Number(e.target.value)))}
+                    className="w-16 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-white text-sm focus:outline-none focus:border-primary" />
+                  <span className="text-xs text-gray-500">نقطة</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Ranked */}
+          <label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${config.scoring_mode === 'ranked' ? 'border-primary bg-primary/10' : 'border-gray-700 hover:border-gray-600'}`}>
+            <input type="radio" name="mode" className="hidden" checked={config.scoring_mode === 'ranked'} onChange={() => set('scoring_mode', 'ranked')} />
+            <div className={`w-4 h-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${config.scoring_mode === 'ranked' ? 'border-primary' : 'border-gray-600'}`}>
+              {config.scoring_mode === 'ranked' && <div className="w-2 h-2 bg-primary rounded-full" />}
+            </div>
+            <div>
+              <p className="text-sm font-bold text-white">ترتيبي</p>
+              <p className="text-xs text-gray-500">الأول N، الثاني N−X، الثالث N−2X…</p>
+            </div>
+          </label>
+
+          {config.scoring_mode === 'ranked' && (
+            <div className="flex gap-4 px-3 pb-1">
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">N (نقاط الأول)</label>
+                <div className="flex items-center gap-1">
+                  <input type="number" min={1} max={100} value={config.first_correct_points}
+                    onChange={e => set('first_correct_points', Math.max(1, Number(e.target.value)))}
+                    className="w-16 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-white text-sm focus:outline-none focus:border-primary" />
+                  <span className="text-xs text-gray-500">نقطة</span>
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">X (الفرق)</label>
+                <div className="flex items-center gap-1">
+                  <input type="number" min={1} max={50} value={config.points_decrement}
+                    onChange={e => set('points_decrement', Math.max(1, Number(e.target.value)))}
+                    className="w-16 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-white text-sm focus:outline-none focus:border-primary" />
+                  <span className="text-xs text-gray-500">نقطة</span>
+                </div>
+              </div>
+              <div className="self-end pb-1.5">
+                <p className="text-xs text-gray-600 font-mono">
+                  {config.first_correct_points}، {Math.max(0, config.first_correct_points - config.points_decrement)}، {Math.max(0, config.first_correct_points - 2 * config.points_decrement)}…
+                </p>
+              </div>
+            </div>
+          )}
+
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Fisher-Yates shuffle ──────────────────────────────────────────────────────
+function shuffleArray(arr) {
+  const a = [...arr]
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[a[i], a[j]] = [a[j], a[i]]
+  }
+  return a
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
+export default function HostGameRoom() {
+  const { roomId }  = useParams()
+  const { session } = useAuth()
+  const navigate    = useNavigate()
+
+  const [room, setRoom]         = useState(null)
   const [requests, setRequests] = useState([])
-  const [players, setPlayers] = useState([])
-  const [presence, setPresence] = useState({})   // { [userId]: { online, last_seen } }
-  const [answers, setAnswers] = useState([])
+  const [players, setPlayers]   = useState([])
+  const [presence, setPresence] = useState({})
+  const [answers, setAnswers]   = useState([])
   const [revealResult, setRevealResult] = useState(null)
-  const [isRevealing, setIsRevealing] = useState(false)
-  const [timerKey, setTimerKey] = useState(0)
+  const [isRevealing, setIsRevealing]   = useState(false)
+  const [timerKey, setTimerKey]   = useState(0)
   const [showTimer, setShowTimer] = useState(false)
   const [processingRequests, setProcessingRequests] = useState(new Set())
   const [endingGame, setEndingGame] = useState(false)
 
+  const [gameConfig, setGameConfig] = useState({
+    scoring_mode: 'classic',
+    shuffle_choices: false,
+    first_correct_points: 3,
+    other_correct_points: 1,
+    points_decrement: 1,
+  })
+
   // ── Host presence ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (!session) return
-    const hostPresenceRef = ref(rtdb, `rooms/${roomId}/presence/host`)
-
-    // Mark host as online
-    set(hostPresenceRef, { online: true, last_seen: Date.now() })
-
-    // Mark host as offline on disconnect
-    onDisconnect(hostPresenceRef).set({ online: false, last_seen: Date.now() })
-
-    return () => {
-      // Mark offline on unmount (navigating away)
-      set(hostPresenceRef, { online: false, last_seen: Date.now() })
-    }
+    const presRef = ref(rtdb, `rooms/${roomId}/presence/host`)
+    set(presRef, { online: true, last_seen: Date.now() })
+    onDisconnect(presRef).set({ online: false, last_seen: Date.now() })
+    return () => set(presRef, { online: false, last_seen: Date.now() })
   }, [roomId, session])
 
-  // ── Subscribe to room ─────────────────────────────────────────────────────
+  // ── Room subscription ─────────────────────────────────────────────────────
   useEffect(() => {
     if (!session) return
-    const roomRef = ref(rtdb, `rooms/${roomId}`)
-    const unsubRoom = onValue(roomRef, (snap) => {
+    const unsubRoom = onValue(ref(rtdb, `rooms/${roomId}`), snap => {
       if (!snap.exists()) return
       const data = snap.val()
       setRoom(prev => {
         if (prev && data.current_question_index !== prev.current_question_index) {
-          setAnswers([])
-          setRevealResult(null)
-          setTimerKey(k => k + 1)
+          setAnswers([]); setRevealResult(null); setTimerKey(k => k + 1)
         }
-        if (data.status === 'finished' && prev?.status !== 'finished') {
+        if (data.status === 'finished' && prev?.status !== 'finished')
           confetti({ particleCount: 150, spread: 90, origin: { y: 0.6 } })
-        }
         return data
       })
     })
     return () => unsubRoom()
   }, [roomId, session])
 
-  // ── Subscribe to join requests ────────────────────────────────────────────
+  // ── Requests, players, presence, answers ──────────────────────────────────
   useEffect(() => {
     if (!session) return
-    const reqRef = ref(rtdb, `rooms/${roomId}/join_requests`)
-    const unsubReq = onValue(reqRef, (snap) => {
+    const unsubReq = onValue(ref(rtdb, `rooms/${roomId}/join_requests`), snap => {
       if (!snap.exists()) { setRequests([]); return }
-      const all = Object.entries(snap.val()).map(([key, val]) => ({ key, ...val }))
-      setRequests(all.filter(r => r.status === 'pending'))
+      setRequests(Object.entries(snap.val()).map(([key, val]) => ({ key, ...val })).filter(r => r.status === 'pending'))
     })
     return () => unsubReq()
   }, [roomId, session])
 
-  // ── Subscribe to players ──────────────────────────────────────────────────
   useEffect(() => {
     if (!session) return
-    const playersRef = ref(rtdb, `rooms/${roomId}/players`)
-    const unsubPlayers = onValue(playersRef, (snap) => {
+    const unsubPlayers = onValue(ref(rtdb, `rooms/${roomId}/players`), snap => {
       if (!snap.exists()) { setPlayers([]); return }
-      const list = Object.values(snap.val()).sort((a, b) => b.score - a.score)
-      setPlayers(list)
+      setPlayers(Object.values(snap.val()).sort((a, b) => b.score - a.score))
     })
     return () => unsubPlayers()
   }, [roomId, session])
 
-  // ── Subscribe to presence ─────────────────────────────────────────────────
   useEffect(() => {
     if (!session) return
-    const presenceRef = ref(rtdb, `rooms/${roomId}/presence/players`)
-    const unsubPresence = onValue(presenceRef, (snap) => {
+    const unsubPres = onValue(ref(rtdb, `rooms/${roomId}/presence/players`), snap => {
       setPresence(snap.exists() ? snap.val() : {})
     })
-    return () => unsubPresence()
+    return () => unsubPres()
   }, [roomId, session])
 
-  // ── Subscribe to answers ──────────────────────────────────────────────────
   useEffect(() => {
     if (!session || room?.current_question_index === undefined) return
     const qIdx = room.current_question_index
-    const answersRef = ref(rtdb, `rooms/${roomId}/answers/${qIdx}`)
-    const unsubAnswers = onValue(answersRef, (snap) => {
-      if (!snap.exists()) { setAnswers([]); return }
-      setAnswers(Object.values(snap.val()))
+    const unsubAns = onValue(ref(rtdb, `rooms/${roomId}/answers/${qIdx}`), snap => {
+      setAnswers(snap.exists() ? Object.values(snap.val()) : [])
     })
-    return () => unsubAnswers()
+    return () => unsubAns()
   }, [roomId, session, room?.current_question_index])
 
   // ── Handle join request ───────────────────────────────────────────────────
@@ -153,98 +277,125 @@ export default function HostGameRoom() {
         await update(ref(rtdb), {
           [`rooms/${roomId}/join_requests/${reqKey}/status`]: 'approved',
           [`rooms/${roomId}/players/${reqKey}`]: {
-            user_id: reqKey,
-            nickname: reqData.player_name,
-            avatar_url: reqData.player_avatar || null,
-            score: 0,
-            joined_at: Date.now()
+            user_id: reqKey, nickname: reqData.player_name,
+            avatar_url: reqData.player_avatar || null, score: 0, joined_at: Date.now()
           }
         })
       } else {
         await update(ref(rtdb, `rooms/${roomId}/join_requests/${reqKey}`), { status: 'rejected' })
       }
-    } catch (err) {
-      alert('Error processing request: ' + err.message)
-    } finally {
-      setProcessingRequests(prev => { const n = new Set(prev); n.delete(reqKey); return n })
-    }
+    } catch (err) { alert('Error: ' + err.message) }
+    finally { setProcessingRequests(prev => { const n = new Set(prev); n.delete(reqKey); return n }) }
   }
 
   // ── Start game ────────────────────────────────────────────────────────────
   const startGame = async () => {
     try {
+      // Optionally shuffle choices for every question
+      let questions = room.questions
+      if (gameConfig.shuffle_choices) {
+        questions = {
+          ...questions,
+          questions: questions.questions.map(q => {
+            const indices = q.choices.map((_, i) => i)
+            const shuffled = shuffleArray(indices)
+            return {
+              ...q,
+              choices: shuffled.map(i => q.choices[i]),
+              correct: shuffled.indexOf(q.correct),
+            }
+          })
+        }
+      }
+
       await update(ref(rtdb, `rooms/${roomId}`), {
         status: 'playing',
         current_question_index: 0,
-        question_started_at: Date.now()
+        question_started_at: Date.now(),
+        config: gameConfig,
+        questions,   // may be shuffled version
       })
       setTimerKey(k => k + 1)
-    } catch (err) {
-      alert('Failed to start game: ' + err.message)
-    }
+    } catch (err) { alert('Failed to start: ' + err.message) }
   }
 
-  // ── End competition (forced) ──────────────────────────────────────────────
+  // ── End competition ───────────────────────────────────────────────────────
   const endCompetition = async () => {
-    if (!window.confirm('إنهاء المسابقة الآن؟ لن يتمكن أي أحد من الإجابة بعدها.')) return
+    if (!window.confirm('إنهاء المسابقة الآن؟')) return
     setEndingGame(true)
-    try {
-      await update(ref(rtdb, `rooms/${roomId}`), { status: 'finished' })
-    } catch (err) {
-      alert('Failed to end competition: ' + err.message)
-    } finally {
-      setEndingGame(false)
-    }
+    try { await update(ref(rtdb, `rooms/${roomId}`), { status: 'finished' }) }
+    catch (err) { alert('Error: ' + err.message) }
+    finally { setEndingGame(false) }
   }
 
   // ── Reveal answer ─────────────────────────────────────────────────────────
   const revealAnswer = async () => {
     setIsRevealing(true)
     try {
-      const qIdx = room.current_question_index
+      const config       = room.config || { scoring_mode: 'classic' }
+      const qIdx         = room.current_question_index
       const correctChoice = room.questions.questions[qIdx].correct
+
       const answersSnap = await get(ref(rtdb, `rooms/${roomId}/answers/${qIdx}`))
-      const answersData = answersSnap.exists() ? Object.values(answersSnap.val()) : []
-      const correctAnswers = answersData
+      const allAnswers  = answersSnap.exists() ? Object.values(answersSnap.val()) : []
+      const correct     = allAnswers
         .filter(a => a.selected_choice === correctChoice)
         .sort((a, b) => a.reaction_time_ms - b.reaction_time_ms)
-      const winner = correctAnswers[0] || null
 
-      const scoreUpdates = {}
-      if (winner) {
-        const playerRef = `rooms/${roomId}/players/${winner.user_id}/score`
-        const playerSnap = await get(ref(rtdb, playerRef))
-        scoreUpdates[playerRef] = (playerSnap.val() || 0) + 1
+      const winner = correct[0] || null
+
+      // ── Calculate points per rank ─────────────────────────────────────────
+      const getPoints = (rank0) => {   // rank0 = 0-indexed
+        const { scoring_mode, first_correct_points: N = 3, other_correct_points: M = 1, points_decrement: X = 1 } = config
+        if (scoring_mode === 'classic')  return rank0 === 0 ? 1 : 0
+        if (scoring_mode === 'custom')   return rank0 === 0 ? N : M
+        if (scoring_mode === 'ranked')   return Math.max(0, N - rank0 * X)
+        return 0
       }
 
+      // ── Build updates ─────────────────────────────────────────────────────
+      const scoreUpdates  = {}
       const answerUpdates = {}
-      if (winner) {
-        answerUpdates[`rooms/${roomId}/answers/${qIdx}/${winner.user_id}/is_first_correct`] = true
-      }
 
-      const revealData = winner
-        ? { winner_nickname: winner.player_name, winner_time_ms: winner.reaction_time_ms }
-        : { winner_nickname: null, winner_time_ms: null }
+      // Batch-read all player scores we need to update
+      const toUpdate = correct.filter((_, i) => getPoints(i) > 0)
+      const scoreSnaps = await Promise.all(
+        toUpdate.map(a => get(ref(rtdb, `rooms/${roomId}/players/${a.user_id}/score`)))
+      )
+
+      toUpdate.forEach((a, idx) => {
+        const pts = getPoints(correct.indexOf(a))
+        scoreUpdates[`rooms/${roomId}/players/${a.user_id}/score`] = (scoreSnaps[idx].val() || 0) + pts
+        answerUpdates[`rooms/${roomId}/answers/${qIdx}/${a.user_id}/points_earned`] = pts
+      })
+
+      // Rank + is_first_correct for all correct answers
+      correct.forEach((a, i) => {
+        answerUpdates[`rooms/${roomId}/answers/${qIdx}/${a.user_id}/rank`]             = i + 1
+        answerUpdates[`rooms/${roomId}/answers/${qIdx}/${a.user_id}/is_first_correct`] = i === 0
+      })
+
+      const revealData = {
+        winner_nickname: winner?.player_name || null,
+        winner_time_ms:  winner?.reaction_time_ms || null,
+        correct_count:   correct.length,
+      }
 
       await update(ref(rtdb), {
         ...scoreUpdates,
         ...answerUpdates,
-        [`rooms/${roomId}/status`]: 'revealing',
-        [`rooms/${roomId}/reveal_data`]: revealData
+        [`rooms/${roomId}/status`]:      'revealing',
+        [`rooms/${roomId}/reveal_data`]: revealData,
       })
       setRevealResult(revealData)
-    } catch (err) {
-      alert('Failed to reveal answer: ' + err.message)
-    } finally {
-      setIsRevealing(false)
-    }
+    } catch (err) { alert('Reveal failed: ' + err.message) }
+    finally { setIsRevealing(false) }
   }
 
   // ── Next question ─────────────────────────────────────────────────────────
   const nextQuestion = async () => {
     if (!room?.questions?.questions) return
-    const total = room.questions.questions.length
-    const isFinished = room.current_question_index + 1 >= total
+    const isFinished = room.current_question_index + 1 >= room.questions.questions.length
     try {
       if (isFinished) {
         await update(ref(rtdb, `rooms/${roomId}`), { status: 'finished' })
@@ -253,15 +404,14 @@ export default function HostGameRoom() {
           status: 'playing',
           current_question_index: room.current_question_index + 1,
           question_started_at: Date.now(),
-          reveal_data: null
+          reveal_data: null,
         })
       }
       setRevealResult(null)
-    } catch (err) {
-      alert('Failed to advance: ' + err.message)
-    }
+    } catch (err) { alert('Error: ' + err.message) }
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
   if (!room) return (
     <div className="text-white p-6 flex items-center gap-3">
       <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
@@ -269,71 +419,70 @@ export default function HostGameRoom() {
     </div>
   )
 
-  const currentQuestion = room.questions?.questions?.[room.current_question_index]
-  const isRevealing_ = room.status === 'revealing'
+  const currentQ    = room.questions?.questions?.[room.current_question_index]
+  const isRevealPhase = room.status === 'revealing'
+  const totalPlayers  = players.length
   const answeredCount = answers.length
-  const totalPlayers = players.length
+  const config        = room.config || { scoring_mode: 'classic' }
 
   return (
     <div className="min-h-screen bg-background text-white p-6">
-      <div className="max-w-6xl mx-auto space-y-8">
+      <div className="max-w-6xl mx-auto space-y-6">
 
         {/* Header */}
-        <div className="flex items-center justify-between bg-gray-900/50 p-6 rounded-2xl border border-gray-800">
+        <div className="flex items-center justify-between bg-gray-900/50 p-5 rounded-2xl border border-gray-800">
           <div>
-            <h1 className="text-4xl font-display font-bold text-white mb-2">{room.title}</h1>
-            <p className="text-xl text-primary font-mono tracking-widest">JOIN CODE: {roomId}</p>
+            <h1 className="text-3xl font-display font-bold text-white">{room.title}</h1>
+            <p className="text-lg text-primary font-mono tracking-widest mt-1">JOIN: {roomId}</p>
           </div>
-          <div className="flex items-center gap-4">
-            {/* End Competition button — visible any time except finished */}
+          <div className="flex items-center gap-3">
             {room.status !== 'finished' && (
-              <button
-                onClick={endCompetition}
-                disabled={endingGame}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 transition-all font-bold text-sm disabled:opacity-50"
-              >
-                <StopCircle size={16} /> {endingGame ? 'Ending...' : 'End Competition'}
+              <button onClick={endCompetition} disabled={endingGame}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 transition-colors font-bold text-sm disabled:opacity-50">
+                <StopCircle size={15} /> {endingGame ? 'Ending...' : 'End'}
               </button>
             )}
             <div className="text-right">
-              <div className="text-2xl font-bold">{totalPlayers} Players</div>
-              <div className={`capitalize px-4 py-1 rounded-full inline-block mt-2 text-sm font-bold ${
-                room.status === 'playing' ? 'bg-green-500/20 text-green-400' :
+              <div className="text-xl font-bold">{totalPlayers} Players</div>
+              <div className={`capitalize px-3 py-0.5 rounded-full inline-block mt-1 text-xs font-bold ${
+                room.status === 'playing'   ? 'bg-green-500/20 text-green-400' :
                 room.status === 'revealing' ? 'bg-yellow-500/20 text-yellow-400' :
-                room.status === 'finished' ? 'bg-primary/20 text-primary' :
-                'bg-gray-800 text-gray-400'
-              }`}>
+                room.status === 'finished'  ? 'bg-primary/20 text-primary' :
+                'bg-gray-800 text-gray-400'}`}>
                 {room.status}
               </div>
             </div>
           </div>
         </div>
 
-        {/* ─── LOBBY ──────────────────────────────────────────────────────── */}
+        {/* ── LOBBY ──────────────────────────────────────────────────────── */}
         {room.status === 'lobby' && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            <div className="bg-gray-900/50 p-6 rounded-2xl border border-gray-800">
-              <h2 className="text-2xl font-display font-bold mb-4 flex items-center gap-2">
-                Join Requests <span className="text-primary bg-primary/20 px-3 py-1 rounded-full text-sm">{requests.length}</span>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+            {/* Join Requests */}
+            <div className="bg-gray-900/50 p-5 rounded-2xl border border-gray-800">
+              <h2 className="text-lg font-display font-bold mb-4 flex items-center gap-2">
+                Join Requests
+                <span className="text-primary bg-primary/20 px-2 py-0.5 rounded-full text-xs">{requests.length}</span>
               </h2>
-              <div className="space-y-4 max-h-96 overflow-y-auto pr-2">
-                {requests.length === 0 && <p className="text-gray-500 italic">No pending requests...</p>}
+              <div className="space-y-3 max-h-64 overflow-y-auto pr-1">
+                {requests.length === 0 && <p className="text-gray-500 italic text-sm">No pending requests...</p>}
                 {requests.map(req => (
-                  <div key={req.key} className="flex items-center justify-between p-4 bg-gray-800 rounded-xl border border-gray-700">
+                  <div key={req.key} className="flex items-center justify-between p-3 bg-gray-800 rounded-xl border border-gray-700">
                     <div>
-                      <div className="font-bold flex items-center gap-2">
-                        {req.player_avatar && <img src={req.player_avatar} alt="avatar" className="w-6 h-6 rounded-full" />}
+                      <div className="font-bold text-sm flex items-center gap-2">
+                        {req.player_avatar && <img src={req.player_avatar} alt="" className="w-5 h-5 rounded-full" />}
                         {req.player_name}
                       </div>
-                      <div className="text-sm text-gray-400">{req.player_email}</div>
+                      <div className="text-xs text-gray-400">{req.player_email}</div>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex gap-1">
                       {processingRequests.has(req.key) ? (
-                        <div className="p-2 text-primary animate-spin"><Loader2 size={20} /></div>
+                        <Loader2 size={18} className="text-primary animate-spin" />
                       ) : (
                         <>
-                          <button onClick={() => handleRequest(req.key, 'approved')} className="bg-green-500/20 text-green-500 hover:bg-green-500/30 p-2 rounded-lg transition-colors"><CheckCircle size={20} /></button>
-                          <button onClick={() => handleRequest(req.key, 'rejected')} className="bg-red-500/20 text-red-500 hover:bg-red-500/30 p-2 rounded-lg transition-colors"><XCircle size={20} /></button>
+                          <button onClick={() => handleRequest(req.key, 'approved')} className="bg-green-500/20 text-green-500 hover:bg-green-500/30 p-1.5 rounded-lg transition-colors"><CheckCircle size={16} /></button>
+                          <button onClick={() => handleRequest(req.key, 'rejected')} className="bg-red-500/20 text-red-500 hover:bg-red-500/30 p-1.5 rounded-lg transition-colors"><XCircle size={16} /></button>
                         </>
                       )}
                     </div>
@@ -342,135 +491,148 @@ export default function HostGameRoom() {
               </div>
             </div>
 
-            <div className="bg-gray-900/50 p-6 rounded-2xl border border-gray-800 flex flex-col">
-              <h2 className="text-2xl font-display font-bold mb-4 flex items-center gap-2">
-                Ready Players <span className="text-secondary bg-secondary/20 px-3 py-1 rounded-full text-sm">{totalPlayers}</span>
-              </h2>
-              <div className="flex-1 grid grid-cols-2 gap-4 auto-rows-max overflow-y-auto pr-2 max-h-72">
-                {totalPlayers === 0 && <p className="text-gray-500 italic col-span-2">Waiting for approvals...</p>}
-                {players.map(p => (
-                  <div key={p.user_id} className="flex items-center gap-3 p-3 bg-gray-800 rounded-xl border border-gray-700">
-                    {p.avatar_url ? <img src={p.avatar_url} alt="avatar" className="w-8 h-8 rounded-full" /> : <div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center"><UserCheck size={16} /></div>}
-                    <span className="font-bold truncate flex-1">{p.nickname}</span>
-                    {/* Online indicator */}
-                    <div className={`w-2 h-2 rounded-full flex-shrink-0 ${presence[p.user_id]?.online ? 'bg-green-400' : 'bg-gray-600'}`} title={presence[p.user_id]?.online ? 'Online' : 'Offline'} />
-                  </div>
-                ))}
+            {/* Players + Config + Start */}
+            <div className="lg:col-span-2 space-y-4">
+              {/* Players */}
+              <div className="bg-gray-900/50 p-5 rounded-2xl border border-gray-800">
+                <h2 className="text-lg font-display font-bold mb-3 flex items-center gap-2">
+                  Ready
+                  <span className="text-secondary bg-secondary/20 px-2 py-0.5 rounded-full text-xs">{totalPlayers}</span>
+                </h2>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-32 overflow-y-auto">
+                  {totalPlayers === 0 && <p className="text-gray-500 italic text-sm col-span-full">Waiting...</p>}
+                  {players.map(p => (
+                    <div key={p.user_id} className="flex items-center gap-2 p-2 bg-gray-800 rounded-lg border border-gray-700">
+                      {p.avatar_url ? <img src={p.avatar_url} alt="" className="w-6 h-6 rounded-full" /> : <UserCheck size={14} className="text-gray-500" />}
+                      <span className="font-bold text-sm truncate flex-1">{p.nickname}</span>
+                      <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${presence[p.user_id]?.online ? 'bg-green-400' : 'bg-gray-600'}`} />
+                    </div>
+                  ))}
+                </div>
               </div>
-              <button
-                onClick={startGame}
-                disabled={totalPlayers === 0}
-                className="mt-6 w-full bg-primary text-background font-bold py-4 rounded-xl flex items-center justify-center gap-2 hover:bg-[#00D4FF] disabled:opacity-50 transition-all active:scale-95 text-lg"
-              >
-                <Play size={24} fill="currentColor" /> Start Game
+
+              {/* Config */}
+              <GameConfigPanel config={gameConfig} onChange={setGameConfig} />
+
+              {/* Start button */}
+              <button onClick={startGame} disabled={totalPlayers === 0}
+                className="w-full bg-primary text-background font-bold py-4 rounded-xl flex items-center justify-center gap-2 hover:bg-[#00D4FF] disabled:opacity-50 transition-colors active:scale-95 text-lg">
+                <Play size={22} fill="currentColor" /> Start Game
               </button>
             </div>
           </div>
         )}
 
-        {/* ─── PLAYING & REVEALING ────────────────────────────────────────── */}
-        {(room.status === 'playing' || room.status === 'revealing') && !currentQuestion && (
-          <div className="bg-gray-900/50 p-12 rounded-2xl border border-gray-800 text-center animate-pulse">
-            <h2 className="text-2xl font-bold text-gray-400">Preparing first question...</h2>
-          </div>
-        )}
-
-        {(room.status === 'playing' || room.status === 'revealing') && currentQuestion && (
-          <div className="space-y-6">
-            <div className="bg-gray-900/50 p-8 rounded-2xl border border-primary relative overflow-hidden">
+        {/* ── PLAYING & REVEALING ─────────────────────────────────────────── */}
+        {(room.status === 'playing' || room.status === 'revealing') && currentQ && (
+          <div className="space-y-5">
+            <div className="bg-gray-900/50 p-6 rounded-2xl border border-primary relative overflow-hidden">
+              {/* Progress strip */}
               <div className="absolute top-0 left-0 w-full h-1 bg-gray-800">
-                <div className="h-full bg-primary transition-all" style={{ width: `${((room.current_question_index + 1) / room.questions.questions.length) * 100}%` }} />
-              </div>
-              <div className="flex justify-between items-center mb-4 text-gray-400">
-                <span className="font-bold text-primary">Question {room.current_question_index + 1} / {room.questions.questions.length}</span>
-                <span className={`font-mono text-lg ${answeredCount === totalPlayers ? 'text-green-400 font-bold' : ''}`}>
-                  {answeredCount} / {totalPlayers} answered
-                </span>
+                <div className="h-full bg-primary" style={{ width: `${((room.current_question_index + 1) / room.questions.questions.length) * 100}%` }} />
               </div>
 
-              {showTimer && !isRevealing_ && (
-                <div className="mb-6">
-                  <QuestionTimer key={timerKey} started={room.question_started_at} duration={currentQuestion.time_limit || 30} />
+              <div className="flex justify-between items-center mb-4 text-sm text-gray-400">
+                <span className="font-bold text-primary">Q {room.current_question_index + 1} / {room.questions.questions.length}</span>
+                <div className="flex items-center gap-3">
+                  {/* Scoring badge */}
+                  <span className="text-xs font-mono bg-gray-800 px-2 py-0.5 rounded">
+                    {config.scoring_mode === 'classic' ? '🏆 كلاسيك' :
+                     config.scoring_mode === 'custom'  ? `✨ ${config.first_correct_points}/${config.other_correct_points} نقاط` :
+                     `📊 ${config.first_correct_points}−${config.points_decrement} ترتيبي`}
+                  </span>
+                  <span className={`font-mono ${answeredCount === totalPlayers ? 'text-green-400 font-bold' : ''}`}>
+                    {answeredCount} / {totalPlayers} answered
+                  </span>
+                </div>
+              </div>
+
+              {showTimer && !isRevealPhase && (
+                <div className="mb-4">
+                  <QuestionTimer key={timerKey} started={room.question_started_at} duration={currentQ.time_limit || 30} />
                 </div>
               )}
 
-              <h2 className="text-3xl font-bold mb-6">{currentQuestion.question}</h2>
+              <h2 className="text-2xl font-bold mb-6">{currentQ.question}</h2>
 
-              {currentQuestion.image_url && (
-                <div className="mb-6 rounded-xl overflow-hidden border border-gray-700 bg-gray-900">
-                  <img src={currentQuestion.image_url} alt="question" className="w-full max-h-72 object-contain" />
+              {currentQ.image_url && (
+                <div className="mb-5 rounded-xl overflow-hidden border border-gray-700 bg-gray-900">
+                  <img src={currentQ.image_url} alt="question" className="w-full max-h-56 object-contain" />
                 </div>
               )}
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {currentQuestion.choices.map((choice, i) => {
-                  const isCorrect = i === currentQuestion.correct
-                  const count = answers.filter(a => a.selected_choice === i).length
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {currentQ.choices.map((choice, i) => {
+                  const isCorrect = i === currentQ.correct
+                  const count     = answers.filter(a => a.selected_choice === i).length
                   return (
-                    <div key={i} className={`p-4 rounded-xl border flex justify-between items-center transition-all ${
-                      isRevealing_
-                        ? isCorrect ? 'border-primary bg-primary/10 shadow-[0_0_15px_rgba(0,255,255,0.2)]' : 'border-gray-700 bg-gray-800 opacity-50'
+                    <div key={i} className={`p-4 rounded-xl border flex justify-between items-center transition-colors ${
+                      isRevealPhase
+                        ? isCorrect ? 'border-primary bg-primary/10 shadow-[0_0_15px_rgba(0,255,255,0.15)]' : 'border-gray-700 bg-gray-800 opacity-50'
                         : 'border-gray-700 bg-gray-800'
                     }`}>
-                      <span className={isRevealing_ && isCorrect ? 'font-bold text-primary' : ''}>{choice}</span>
-                      <span className="font-mono text-xl font-bold">{count}</span>
+                      <span className={isRevealPhase && isCorrect ? 'font-bold text-primary' : ''}>{choice}</span>
+                      <span className="font-mono text-lg font-bold ml-3 flex-shrink-0">{count}</span>
                     </div>
                   )
                 })}
               </div>
 
-              {isRevealing_ && revealResult?.winner_nickname && (
-                <div className="mt-6 flex items-center gap-3 bg-[#FFD700]/10 border border-[#FFD700]/40 text-[#FFD700] px-6 py-3 rounded-xl">
-                  <Trophy size={20} />
-                  <span className="font-bold">Fastest correct: <span className="text-white">{revealResult.winner_nickname}</span></span>
-                  <span className="text-sm ml-auto opacity-70">{revealResult.winner_time_ms}ms</span>
+              {/* Reveal result */}
+              {isRevealPhase && revealResult && (
+                <div className="mt-5 space-y-2">
+                  {revealResult.winner_nickname ? (
+                    <div className="flex items-center gap-3 bg-[#FFD700]/10 border border-[#FFD700]/40 text-[#FFD700] px-5 py-3 rounded-xl">
+                      <Trophy size={18} />
+                      <span className="font-bold">الأول: <span className="text-white">{revealResult.winner_nickname}</span></span>
+                      <span className="text-sm ml-auto opacity-70">{revealResult.winner_time_ms}ms</span>
+                    </div>
+                  ) : (
+                    <div className="text-gray-500 text-center text-sm">ما حدش أجاب صح!</div>
+                  )}
+                  {revealResult.correct_count > 0 && (
+                    <p className="text-xs text-gray-500 text-center font-mono">{revealResult.correct_count} طالب أجاب صح</p>
+                  )}
                 </div>
               )}
-              {isRevealing_ && revealResult && !revealResult.winner_nickname && (
-                <div className="mt-6 text-gray-500 text-center text-sm">No one answered correctly this round.</div>
-              )}
 
-              <div className="mt-8 flex items-center justify-between gap-4">
-                <button
-                  onClick={() => setShowTimer(v => !v)}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-sm transition-all ${showTimer ? 'border-primary text-primary bg-primary/10' : 'border-gray-700 text-gray-500 hover:border-gray-600'}`}
-                >
-                  <Timer size={16} /> {showTimer ? 'Hide Timer' : 'Show Timer'}
+              {/* Controls */}
+              <div className="mt-6 flex items-center justify-between gap-4">
+                <button onClick={() => setShowTimer(v => !v)}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-sm transition-colors ${showTimer ? 'border-primary text-primary bg-primary/10' : 'border-gray-700 text-gray-500 hover:border-gray-600'}`}>
+                  <Timer size={15} /> {showTimer ? 'Hide Timer' : 'Show Timer'}
                 </button>
                 <div className="flex gap-3">
                   {room.status === 'playing' && (
-                    <button onClick={revealAnswer} disabled={isRevealing} className="bg-yellow-500 text-black font-bold px-6 py-3 rounded-xl flex items-center gap-2 hover:bg-yellow-400 disabled:opacity-50 transition-all active:scale-95">
-                      <Eye size={20} /> {isRevealing ? 'Revealing...' : 'Reveal Answer'}
+                    <button onClick={revealAnswer} disabled={isRevealing}
+                      className="bg-yellow-500 text-black font-bold px-6 py-2.5 rounded-xl flex items-center gap-2 hover:bg-yellow-400 disabled:opacity-50 transition-colors active:scale-95">
+                      <Eye size={18} /> {isRevealing ? '...' : 'Reveal Answer'}
                     </button>
                   )}
                   {room.status === 'revealing' && (
-                    <button onClick={nextQuestion} className="bg-white text-black font-bold px-6 py-3 rounded-xl flex items-center gap-2 hover:bg-gray-200 transition-all active:scale-95">
-                      Next <SkipForward size={20} />
+                    <button onClick={nextQuestion}
+                      className="bg-white text-black font-bold px-6 py-2.5 rounded-xl flex items-center gap-2 hover:bg-gray-200 transition-colors active:scale-95">
+                      Next <SkipForward size={18} />
                     </button>
                   )}
                 </div>
               </div>
             </div>
 
-            {/* Live Leaderboard with online indicators */}
-            <div className="bg-gray-900/50 p-6 rounded-2xl border border-gray-800">
-              <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
-                <Trophy className="text-[#FFD700]" /> Live Leaderboard
+            {/* Live Leaderboard */}
+            <div className="bg-gray-900/50 p-5 rounded-2xl border border-gray-800">
+              <h3 className="text-base font-bold mb-3 flex items-center gap-2">
+                <Trophy className="text-[#FFD700]" size={16} /> Live Leaderboard
               </h3>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {players.slice(0, 3).map((p, idx) => (
-                  <div key={p.user_id} className="bg-gray-800 p-4 rounded-xl border border-gray-700 flex justify-between items-center">
-                    <div className="flex items-center gap-3">
-                      <span className="text-xl font-bold text-gray-500">#{idx + 1}</span>
-                      <span className="font-bold">{p.nickname}</span>
-                      {/* Online dot */}
-                      {!presence[p.user_id]?.online && (
-                        <span className="flex items-center gap-1 text-xs text-red-400">
-                          <WifiOff size={12} /> غادر
-                        </span>
-                      )}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {players.slice(0, 8).map((p, idx) => (
+                  <div key={p.user_id} className="bg-gray-800 p-3 rounded-xl border border-gray-700 flex justify-between items-center">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-sm font-bold text-gray-500 flex-shrink-0">#{idx + 1}</span>
+                      <span className="font-bold text-sm truncate">{p.nickname}</span>
+                      {!presence[p.user_id]?.online && <WifiOff size={11} className="text-red-400 flex-shrink-0" />}
                     </div>
-                    <span className="font-mono text-primary font-bold">{p.score}</span>
+                    <span className="font-mono text-primary font-bold text-sm flex-shrink-0 ml-1">{p.score}</span>
                   </div>
                 ))}
               </div>
@@ -478,33 +640,30 @@ export default function HostGameRoom() {
           </div>
         )}
 
-        {/* ─── FINISHED ───────────────────────────────────────────────────── */}
+        {/* ── FINISHED ──────────────────────────────────────────────────── */}
         {room.status === 'finished' && (
           <div className="bg-gray-900/50 p-12 rounded-2xl border border-gray-800 text-center">
             <Trophy size={64} className="mx-auto text-[#FFD700] mb-6" />
-            <h2 className="text-5xl font-display font-bold mb-4 text-transparent bg-clip-text bg-gradient-to-r from-primary to-secondary">Game Finished!</h2>
-            <p className="text-xl text-gray-400 mb-12">Final Leaderboard</p>
-            <div className="max-w-2xl mx-auto space-y-4">
+            <h2 className="text-5xl font-display font-bold mb-4 text-transparent bg-clip-text bg-gradient-to-r from-primary to-secondary">Game Over!</h2>
+            <p className="text-xl text-gray-400 mb-10">Final Leaderboard</p>
+            <div className="max-w-2xl mx-auto space-y-3">
               {players.map((p, idx) => (
                 <div key={p.user_id} className={`flex items-center justify-between p-4 rounded-xl border ${idx === 0 ? 'bg-primary/20 border-primary' : 'bg-gray-800 border-gray-700'}`}>
                   <div className="flex items-center gap-4">
                     <span className={`text-2xl font-bold ${idx === 0 ? 'text-primary' : 'text-gray-500'}`}>#{idx + 1}</span>
-                    {p.avatar_url ? <img src={p.avatar_url} alt="avatar" className="w-10 h-10 rounded-full" /> : <div className="w-10 h-10 rounded-full bg-gray-700 flex items-center justify-center"><UserCheck size={20} /></div>}
-                    <span className="font-bold text-xl">{p.nickname}</span>
+                    {p.avatar_url ? <img src={p.avatar_url} alt="" className="w-9 h-9 rounded-full" /> : <div className="w-9 h-9 rounded-full bg-gray-700 flex items-center justify-center"><UserCheck size={18} /></div>}
+                    <span className="font-bold text-lg">{p.nickname}</span>
                   </div>
                   <div className="text-2xl font-mono font-bold text-white">{p.score} PTS</div>
                 </div>
               ))}
             </div>
-            <button
-              onClick={() => navigate('/host/dashboard')}
-              className="mt-10 bg-primary text-background font-bold px-8 py-3 rounded-xl hover:bg-[#00D4FF] transition-all"
-            >
+            <button onClick={() => navigate('/host/dashboard')}
+              className="mt-10 bg-primary text-background font-bold px-8 py-3 rounded-xl hover:bg-[#00D4FF] transition-colors">
               Back to Dashboard
             </button>
           </div>
         )}
-
       </div>
     </div>
   )

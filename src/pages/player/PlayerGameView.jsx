@@ -4,25 +4,75 @@ import { ref, onValue, get, set, runTransaction, onDisconnect } from 'firebase/d
 import { rtdb } from '../../lib/firebase'
 import { useAuth } from '../../hooks/useAuth'
 import { useServerClock } from '../../hooks/useServerClock'
-import { Trophy, Clock, CheckCircle2, XCircle, AlertCircle, Zap, WifiOff } from 'lucide-react'
+import { Trophy, Clock, CheckCircle2, XCircle, AlertCircle, Zap, WifiOff, Star } from 'lucide-react'
 import confetti from 'canvas-confetti'
 
-export default function PlayerGameView() {
-  const { roomId } = useParams()   // roomId = room code (e.g. "A1B2C3")
-  const { session } = useAuth()
-  const navigate = useNavigate()
-  const clockOffset = useServerClock()
+// ── Mini leaderboard strip ────────────────────────────────────────────────────
+function MiniLeaderboard({ players, myId }) {
+  if (!players || players.length === 0) return null
+  const top = players.slice(0, 5)
+  const myRank = players.findIndex(p => p.user_id === myId) + 1
 
-  const [room, setRoom] = useState(null)
-  const [player, setPlayer] = useState(null)
+  return (
+    <div className="w-full max-w-2xl mb-3">
+      <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 scrollbar-none">
+        {top.map((p, i) => {
+          const isMe = p.user_id === myId
+          return (
+            <div key={p.user_id}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold flex-shrink-0 transition-colors ${
+                isMe
+                  ? 'bg-primary/20 border border-primary/50 text-primary'
+                  : 'bg-gray-800/80 border border-gray-700 text-gray-300'
+              }`}
+            >
+              <span className="text-gray-500 font-mono">#{i + 1}</span>
+              <span className="max-w-[80px] truncate">{p.nickname}</span>
+              <span className={`font-mono ${isMe ? 'text-primary' : 'text-gray-400'}`}>{p.score}</span>
+            </div>
+          )
+        })}
+        {/* Show my rank if not in top 5 */}
+        {myRank > 5 && (
+          <>
+            <span className="text-gray-700 text-xs flex-shrink-0">···</span>
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold flex-shrink-0 bg-primary/20 border border-primary/50 text-primary">
+              <span className="text-gray-500 font-mono">#{myRank}</span>
+              <span className="max-w-[80px] truncate">{players[myRank - 1]?.nickname}</span>
+              <span className="font-mono text-primary">{players[myRank - 1]?.score}</span>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Choice button ─────────────────────────────────────────────────────────────
+const CHOICE_COLORS = [
+  { base: 'border-[#E21B3C] bg-[#E21B3C]/10 hover:bg-[#E21B3C]/20',   label: 'bg-[#E21B3C]' },
+  { base: 'border-[#1368CE] bg-[#1368CE]/10 hover:bg-[#1368CE]/20',   label: 'bg-[#1368CE]' },
+  { base: 'border-[#D89E00] bg-[#D89E00]/10 hover:bg-[#D89E00]/20',   label: 'bg-[#D89E00]' },
+  { base: 'border-[#26890C] bg-[#26890C]/10 hover:bg-[#26890C]/20',   label: 'bg-[#26890C]' },
+]
+
+export default function PlayerGameView() {
+  const { roomId }   = useParams()
+  const { session }  = useAuth()
+  const navigate     = useNavigate()
+  const clockOffset  = useServerClock()
+
+  const [room, setRoom]               = useState(null)
+  const [player, setPlayer]           = useState(null)
+  const [leaderboard, setLeaderboard] = useState([])
   const [selectedChoice, setSelectedChoice] = useState(null)
-  const [answerLocked, setAnswerLocked] = useState(false)
+  const [answerLocked, setAnswerLocked]     = useState(false)
   const [revealedResult, setRevealedResult] = useState(null)
-  const [hostOnline, setHostOnline] = useState(true)
+  const [hostOnline, setHostOnline]         = useState(true)
 
   const questionServerStartRef = useRef(null)
-  const prevQuestionIndexRef = useRef(null)
-  const prevStatusRef = useRef(null)
+  const prevQuestionIndexRef   = useRef(null)
+  const prevStatusRef          = useRef(null)
 
   const resetForNewQuestion = () => {
     setSelectedChoice(null)
@@ -34,130 +84,118 @@ export default function PlayerGameView() {
   // ── Player presence ───────────────────────────────────────────────────────
   useEffect(() => {
     if (!session) return
-    const userId = session.uid
-    const playerPresenceRef = ref(rtdb, `rooms/${roomId}/presence/players/${userId}`)
-
-    set(playerPresenceRef, { online: true, last_seen: Date.now() })
-    onDisconnect(playerPresenceRef).set({ online: false, last_seen: Date.now() })
-
-    return () => {
-      set(playerPresenceRef, { online: false, last_seen: Date.now() })
-    }
+    const uid = session.uid
+    const presRef = ref(rtdb, `rooms/${roomId}/presence/players/${uid}`)
+    set(presRef, { online: true, last_seen: Date.now() })
+    onDisconnect(presRef).set({ online: false, last_seen: Date.now() })
+    return () => set(presRef, { online: false, last_seen: Date.now() })
   }, [roomId, session])
 
-  // ── Subscribe to host presence ────────────────────────────────────────────
+  // ── Host presence ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (!session) return
-    const hostPresenceRef = ref(rtdb, `rooms/${roomId}/presence/host`)
-    const unsubHost = onValue(hostPresenceRef, (snap) => {
-      if (!snap.exists()) { setHostOnline(true); return }
-      setHostOnline(snap.val().online !== false)
+    const unsub = onValue(ref(rtdb, `rooms/${roomId}/presence/host`), snap => {
+      setHostOnline(!snap.exists() || snap.val().online !== false)
     })
-    return () => unsubHost()
+    return () => unsub()
   }, [roomId, session])
 
-  // ── Subscribe to room ─────────────────────────────────────────────────────
+  // ── Room subscription ─────────────────────────────────────────────────────
   useEffect(() => {
     if (!session) return
-    const userId = session.uid
-
-    const roomRef = ref(rtdb, `rooms/${roomId}`)
-    const unsubRoom = onValue(roomRef, async (snap) => {
+    const uid = session.uid
+    const unsub = onValue(ref(rtdb, `rooms/${roomId}`), async snap => {
       if (!snap.exists()) return
       const data = snap.val()
 
-      // New question started
       if (prevQuestionIndexRef.current !== null &&
           data.current_question_index !== prevQuestionIndexRef.current) {
         resetForNewQuestion()
       }
-
-      // Host revealed answers
       if (data.status === 'revealing' && prevStatusRef.current !== 'revealing') {
-        fetchMyAnswerResult(data.current_question_index, userId)
+        fetchMyAnswerResult(data.current_question_index, uid)
       }
-
       if (data.status === 'finished') {
         confetti({ particleCount: 200, spread: 120, origin: { y: 0.5 } })
       }
 
       prevQuestionIndexRef.current = data.current_question_index
-      prevStatusRef.current = data.status
+      prevStatusRef.current        = data.status
       setRoom(data)
     })
-
-    return () => unsubRoom()
+    return () => unsub()
   }, [roomId, session])
 
-  // ── Subscribe to my player ────────────────────────────────────────────────
+  // ── My player node ────────────────────────────────────────────────────────
   useEffect(() => {
     if (!session) return
-    const userId = session.uid
-
-    const playerRef = ref(rtdb, `rooms/${roomId}/players/${userId}`)
-    const unsubPlayer = onValue(playerRef, (snap) => {
-      if (snap.exists()) {
-        setPlayer(snap.val())
-      }
+    const uid = session.uid
+    const unsub = onValue(ref(rtdb, `rooms/${roomId}/players/${uid}`), snap => {
+      if (snap.exists()) setPlayer(snap.val())
     })
-
-    // Initial check - verify player is in the room
-    get(ref(rtdb, `rooms/${roomId}/players/${userId}`)).then(snap => {
-      if (!snap.exists()) {
-        alert('You are not part of this room!')
-        navigate('/')
-      } else {
+    get(ref(rtdb, `rooms/${roomId}/players/${uid}`)).then(snap => {
+      if (!snap.exists()) { alert('You are not in this room!'); navigate('/') }
+      else {
         setPlayer(snap.val())
         questionServerStartRef.current = Date.now() + clockOffset.current
       }
     })
-
-    return () => unsubPlayer()
+    return () => unsub()
   }, [roomId, session])
 
-  // ── Load existing answer if rejoining mid-game ────────────────────────────
+  // ── Leaderboard subscription ──────────────────────────────────────────────
+  useEffect(() => {
+    if (!session) return
+    const unsub = onValue(ref(rtdb, `rooms/${roomId}/players`), snap => {
+      if (!snap.exists()) { setLeaderboard([]); return }
+      setLeaderboard(Object.values(snap.val()).sort((a, b) => b.score - a.score))
+    })
+    return () => unsub()
+  }, [roomId, session])
+
+  // ── Rejoin: load existing answer ──────────────────────────────────────────
   useEffect(() => {
     if (!session || !room) return
-    const userId = session.uid
-
+    const uid = session.uid
     if (room.status === 'playing' || room.status === 'revealing') {
       const qIdx = room.current_question_index
-      get(ref(rtdb, `rooms/${roomId}/answers/${qIdx}/${userId}`)).then(snap => {
+      get(ref(rtdb, `rooms/${roomId}/answers/${qIdx}/${uid}`)).then(snap => {
         if (snap.exists()) {
           const a = snap.val()
           setSelectedChoice(a.selected_choice)
           setAnswerLocked(true)
-          if (room.status === 'revealing') {
-            fetchMyAnswerResult(qIdx, userId)
-          }
+          if (room.status === 'revealing') fetchMyAnswerResult(qIdx, uid)
         }
       })
     }
   }, [room?.status, room?.current_question_index])
 
-  // ── Fetch my answer result after reveal ───────────────────────────────────
-  const fetchMyAnswerResult = async (questionIndex, userId) => {
-    const [answerSnap, roomSnap] = await Promise.all([
-      get(ref(rtdb, `rooms/${roomId}/answers/${questionIndex}/${userId}`)),
-      get(ref(rtdb, `rooms/${roomId}/reveal_data`))
+  // ── Fetch result after reveal ─────────────────────────────────────────────
+  const fetchMyAnswerResult = async (questionIndex, uid) => {
+    const [answerSnap, revealSnap] = await Promise.all([
+      get(ref(rtdb, `rooms/${roomId}/answers/${questionIndex}/${uid}`)),
+      get(ref(rtdb, `rooms/${roomId}/reveal_data`)),
     ])
-
-    const winnerTimeMs = roomSnap.exists() ? roomSnap.val()?.winner_time_ms : null
+    const revealData     = revealSnap.exists() ? revealSnap.val() : null
+    const winnerTimeMs   = revealData?.winner_time_ms ?? null
+    const winnerNickname = revealData?.winner_nickname ?? null
 
     if (answerSnap.exists()) {
       const a = answerSnap.val()
       const behindMs = a.is_correct && !a.is_first_correct && winnerTimeMs != null
-        ? Math.max(0, a.reaction_time_ms - winnerTimeMs)
-        : null
+        ? Math.max(0, a.reaction_time_ms - winnerTimeMs) : null
       setRevealedResult({
-        is_correct: a.is_correct,
+        is_correct:       a.is_correct,
         is_first_correct: a.is_first_correct,
         reaction_time_ms: a.reaction_time_ms,
-        behind_ms: behindMs
+        points_earned:    a.points_earned ?? 0,
+        rank:             a.rank ?? null,
+        behind_ms:        behindMs,
+        winner_nickname:  winnerNickname,
       })
       if (a.is_correct) confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 } })
     } else {
-      setRevealedResult({ is_correct: false, is_first_correct: false, didNotAnswer: true })
+      setRevealedResult({ didNotAnswer: true, winner_nickname: winnerNickname })
     }
   }
 
@@ -165,45 +203,35 @@ export default function PlayerGameView() {
   const handleChoiceClick = async (choiceIndex) => {
     if (answerLocked || !room || !session) return
 
-    const serverClickTime = Date.now() + clockOffset.current
+    const serverNow  = Date.now() + clockOffset.current
     const reactionMs = questionServerStartRef.current
-      ? Math.round(serverClickTime - questionServerStartRef.current)
+      ? Math.round(serverNow - questionServerStartRef.current)
       : 5000
 
-    // Optimistic UI
     setSelectedChoice(choiceIndex)
     setAnswerLocked(true)
 
-    const userId = session.uid
-    const qIdx = room.current_question_index
+    const uid          = session.uid
+    const qIdx         = room.current_question_index
     const correctChoice = room.questions.questions[qIdx].correct
-    const isCorrect = choiceIndex === correctChoice
+    const isCorrect    = choiceIndex === correctChoice
+    const answerRef    = ref(rtdb, `rooms/${roomId}/answers/${qIdx}/${uid}`)
 
-    const answerRef = ref(rtdb, `rooms/${roomId}/answers/${qIdx}/${userId}`)
-
-    // Use transaction to prevent ghost answers (atomic write-once)
-    const result = await runTransaction(answerRef, (current) => {
-      if (current !== null) {
-        // Already answered - abort transaction
-        return undefined
-      }
+    await runTransaction(answerRef, current => {
+      if (current !== null) return undefined  // already answered — abort
       return {
-        user_id: userId,
-        player_name: player?.nickname || 'Unknown',
-        selected_choice: choiceIndex,
-        is_correct: isCorrect,
-        is_first_correct: false,  // Host calculates this during reveal
+        user_id:          uid,
+        player_name:      player?.nickname || 'Unknown',
+        selected_choice:  choiceIndex,
+        is_correct:       isCorrect,
+        is_first_correct: false,
         reaction_time_ms: reactionMs,
-        submitted_at: Date.now()
+        submitted_at:     Date.now(),
       }
     })
-
-    if (!result.committed) {
-      // Already answered - restore locked state (already locked, no change needed)
-      console.log('[Player] Answer already submitted')
-    }
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
   if (!room || !player) return (
     <div className="flex h-screen items-center justify-center bg-background">
       <div className="flex flex-col items-center gap-4 text-white">
@@ -213,198 +241,267 @@ export default function PlayerGameView() {
     </div>
   )
 
-  const currentQuestion = room.questions?.questions?.[room.current_question_index]
+  const currentQ = room.questions?.questions?.[room.current_question_index]
+  const myId     = session?.uid
 
   return (
-    <div className="flex flex-col min-h-screen bg-background text-white">
+    <div className="flex flex-col h-screen bg-background text-white overflow-hidden">
+
       {/* Host offline banner */}
       {!hostOnline && room?.status !== 'finished' && (
-        <div className="bg-red-500/20 border-b border-red-500/40 px-4 py-2 flex items-center justify-center gap-2 text-red-300 text-sm font-bold">
-          <WifiOff size={16} /> الهوست خرج من اللعبة — في انتظار عودته...
+        <div className="bg-red-500/20 border-b border-red-500/40 px-4 py-2 flex items-center justify-center gap-2 text-red-300 text-sm font-bold flex-shrink-0">
+          <WifiOff size={15} /> الهوست خرج — في انتظار عودته...
         </div>
       )}
-      {/* Top Bar */}
-      <div className="bg-gray-900 border-b border-gray-800 p-4 flex justify-between items-center shadow-lg">
+
+      {/* Top bar */}
+      <div className="bg-gray-900 border-b border-gray-800 px-4 py-3 flex justify-between items-center shadow-lg flex-shrink-0">
         <div className="flex items-center gap-3">
-          {player.avatar_url && <img src={player.avatar_url} alt="avatar" className="w-10 h-10 rounded-full border-2 border-primary" />}
-          <div className="font-bold text-lg">{player.nickname}</div>
+          {player.avatar_url && (
+            <img src={player.avatar_url} alt="" className="w-9 h-9 rounded-full border-2 border-primary" />
+          )}
+          <span className="font-bold text-base">{player.nickname}</span>
         </div>
-        <div className="flex items-center gap-2 bg-gray-800 px-4 py-2 rounded-xl">
-          <Trophy className="text-[#FFD700]" size={20} />
-          <span className="font-mono text-xl font-bold">{player.score} PTS</span>
+        <div className="flex items-center gap-2 bg-gray-800 px-3 py-1.5 rounded-xl">
+          <Trophy className="text-[#FFD700]" size={16} />
+          <span className="font-mono text-lg font-bold">{player.score} PTS</span>
         </div>
       </div>
 
-      <div className="flex-1 flex flex-col justify-center items-center p-6">
+      {/* Main area */}
+      <div className="flex-1 flex flex-col items-center overflow-hidden px-4 pt-4 pb-4">
 
-        {/* LOBBY */}
+        {/* ── LOBBY ──────────────────────────────────────────────────────── */}
         {room.status === 'lobby' && (
-          <div className="text-center space-y-6 max-w-md w-full">
-            <div className="w-24 h-24 bg-gray-800 rounded-full flex items-center justify-center mx-auto border-4 border-primary">
-              <Clock size={40} className="text-primary animate-pulse" />
+          <div className="flex-1 flex items-center justify-center">
+            <div className="text-center space-y-6 max-w-md w-full">
+              <div className="w-20 h-20 bg-gray-800 rounded-full flex items-center justify-center mx-auto border-4 border-primary">
+                <Clock size={36} className="text-primary animate-pulse" />
+              </div>
+              <h1 className="text-3xl font-display font-bold">You're In!</h1>
+              <p className="text-lg text-gray-400">في انتظار <span className="text-white font-bold">{room.title}</span></p>
             </div>
-            <h1 className="text-4xl font-display font-bold">You're In!</h1>
-            <p className="text-xl text-gray-400">Waiting for <span className="text-white font-bold">{room.title}</span> to start...</p>
           </div>
         )}
 
-        {/* PLAYING */}
-        {room.status === 'playing' && currentQuestion && (
-          <div className="max-w-4xl w-full">
+        {/* ── PLAYING ────────────────────────────────────────────────────── */}
+        {room.status === 'playing' && currentQ && (
+          <div className="w-full max-w-2xl flex flex-col gap-3 h-full">
+
+            {/* Mini leaderboard */}
+            <MiniLeaderboard players={leaderboard} myId={myId} />
+
+            {/* Question card — fixed height, scrollable text */}
+            <div className="bg-gray-900/80 rounded-2xl border border-gray-800 p-4 flex-shrink-0">
+              <span className="text-primary font-bold text-xs tracking-widest uppercase block mb-2">
+                سؤال {room.current_question_index + 1} / {room.questions.questions.length}
+              </span>
+              {/* Question text — scrollable if long */}
+              <div className="max-h-28 overflow-y-auto">
+                <p className="text-white font-bold text-base leading-snug">{currentQ.question}</p>
+              </div>
+              {currentQ.image_url && (
+                <img src={currentQ.image_url} alt="q" className="mt-3 w-full max-h-36 object-contain rounded-xl border border-gray-700 bg-gray-950" />
+              )}
+            </div>
+
+            {/* Choices — always visible, fill remaining space */}
             {!answerLocked ? (
-              <div className="animate-in fade-in zoom-in duration-300">
-                <div className="text-center mb-8">
-                  <span className="text-primary font-bold text-sm tracking-widest uppercase mb-2 block">
-                    Question {room.current_question_index + 1}
-                  </span>
-                  <h2 className="text-3xl md:text-5xl font-bold leading-tight">{currentQuestion.question}</h2>
-                  {currentQuestion.image_url && (
-                    <div className="mt-6 rounded-xl overflow-hidden border border-gray-700 bg-gray-900">
-                      <img src={currentQuestion.image_url} alt="question" className="w-full max-h-64 object-contain" />
-                    </div>
-                  )}
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
-                  {currentQuestion.choices.map((choice, idx) => (
-                    <button
-                      key={idx}
-                      onClick={() => handleChoiceClick(idx)}
-                      className="group relative p-6 bg-gray-800 border-2 border-gray-700 rounded-2xl hover:border-primary hover:bg-gray-700 transition-all text-left active:scale-95 overflow-hidden"
-                    >
-                      <div className="absolute inset-0 bg-primary/10 opacity-0 group-hover:opacity-100 transition-opacity" />
-                      <span className="relative z-10 text-xl font-medium">{choice}</span>
+              <div className="grid grid-cols-2 gap-2 flex-1">
+                {currentQ.choices.map((choice, idx) => {
+                  const c = CHOICE_COLORS[idx % CHOICE_COLORS.length]
+                  return (
+                    <button key={idx} onClick={() => handleChoiceClick(idx)}
+                      className={`relative border-2 rounded-2xl p-3 text-left active:scale-95 transition-transform overflow-hidden flex flex-col justify-between ${c.base}`}>
+                      <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg text-white font-bold text-sm mb-2 flex-shrink-0 ${c.label}`}>
+                        {String.fromCharCode(65 + idx)}
+                      </span>
+                      <span className="text-white font-medium text-sm leading-snug">{choice}</span>
                     </button>
-                  ))}
-                </div>
+                  )
+                })}
               </div>
             ) : (
-              <div className="max-w-4xl w-full animate-in fade-in zoom-in duration-300">
-                <div className="text-center mb-8">
-                  <span className="text-primary font-bold text-sm tracking-widest uppercase mb-2 block">
-                    Question {room.current_question_index + 1}
-                  </span>
-                  <h2 className="text-2xl md:text-3xl font-bold leading-tight text-gray-300">{currentQuestion.question}</h2>
-                  {currentQuestion.image_url && (
-                    <div className="mt-4 rounded-xl overflow-hidden border border-gray-700 bg-gray-900">
-                      <img src={currentQuestion.image_url} alt="question" className="w-full max-h-48 object-contain" />
-                    </div>
-                  )}
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
-                  {currentQuestion.choices.map((choice, idx) => {
+              <>
+                <div className="grid grid-cols-2 gap-2 flex-1">
+                  {currentQ.choices.map((choice, idx) => {
                     const isPicked = idx === selectedChoice
+                    const c = CHOICE_COLORS[idx % CHOICE_COLORS.length]
                     return (
-                      <div key={idx} className={`relative p-6 rounded-2xl border-2 transition-all ${
+                      <div key={idx} className={`relative border-2 rounded-2xl p-3 flex flex-col justify-between overflow-hidden transition-all ${
                         isPicked
-                          ? 'border-primary bg-primary/20 scale-[1.02] shadow-[0_0_20px_rgba(0,255,255,0.3)]'
-                          : 'border-gray-700 bg-gray-800 opacity-40'
+                          ? `${c.base} scale-[1.02] shadow-lg`
+                          : 'border-gray-800 bg-gray-900/40 opacity-40'
                       }`}>
-                        <span className="text-xl font-medium">{choice}</span>
-                        {isPicked && <div className="absolute top-2 right-2 text-primary"><Zap size={16} fill="currentColor" /></div>}
+                        <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg text-white font-bold text-sm mb-2 flex-shrink-0 ${isPicked ? c.label : 'bg-gray-700'}`}>
+                          {String.fromCharCode(65 + idx)}
+                        </span>
+                        <span className="text-white font-medium text-sm leading-snug">{choice}</span>
+                        {isPicked && <Zap size={14} className="absolute top-2 right-2 text-white/60" fill="currentColor" />}
                       </div>
                     )
                   })}
                 </div>
-                <div className="mt-8 text-center">
-                  <div className="inline-flex items-center gap-3 bg-gray-900 border border-gray-700 px-6 py-3 rounded-full">
-                    <div className="w-2 h-2 bg-primary rounded-full animate-pulse" />
-                    <span className="text-gray-300 font-medium">Answer locked — waiting for host to reveal...</span>
+                <div className="flex-shrink-0 py-2 text-center">
+                  <div className="inline-flex items-center gap-2 bg-gray-900 border border-gray-700 px-4 py-2 rounded-full">
+                    <div className="w-1.5 h-1.5 bg-primary rounded-full animate-pulse" />
+                    <span className="text-gray-400 text-sm">في انتظار الكشف...</span>
                   </div>
                 </div>
-              </div>
+              </>
             )}
           </div>
         )}
 
-        {/* REVEALING */}
-        {room.status === 'revealing' && currentQuestion && (
-          <div className="max-w-4xl w-full animate-in fade-in zoom-in duration-500">
-            <div className="text-center mb-8">
-              <h2 className="text-2xl font-bold text-gray-400">{currentQuestion.question}</h2>
-              {currentQuestion.image_url && (
-                <div className="mt-4 rounded-xl overflow-hidden border border-gray-700 bg-gray-900">
-                  <img src={currentQuestion.image_url} alt="question" className="w-full max-h-48 object-contain" />
-                </div>
+        {/* ── REVEALING ──────────────────────────────────────────────────── */}
+        {room.status === 'revealing' && currentQ && (
+          <div className="w-full max-w-2xl flex flex-col gap-3 h-full">
+
+            {/* Mini leaderboard */}
+            <MiniLeaderboard players={leaderboard} myId={myId} />
+
+            {/* Question */}
+            <div className="bg-gray-900/80 rounded-2xl border border-gray-800 p-4 flex-shrink-0">
+              <div className="max-h-20 overflow-y-auto">
+                <p className="text-gray-400 font-medium text-sm leading-snug">{currentQ.question}</p>
+              </div>
+              {currentQ.image_url && (
+                <img src={currentQ.image_url} alt="q" className="mt-2 w-full max-h-28 object-contain rounded-xl border border-gray-700 bg-gray-950" />
               )}
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
-              {currentQuestion.choices.map((choice, idx) => {
-                const isCorrect = idx === currentQuestion.correct
-                const isPicked = idx === selectedChoice
+
+            {/* Choices with correct highlight */}
+            <div className="grid grid-cols-2 gap-2 flex-shrink-0">
+              {currentQ.choices.map((choice, idx) => {
+                const isCorrect = idx === currentQ.correct
+                const isPicked  = idx === selectedChoice
+                const c = CHOICE_COLORS[idx % CHOICE_COLORS.length]
                 return (
-                  <div key={idx} className={`relative p-6 rounded-2xl border-2 transition-all ${
+                  <div key={idx} className={`relative border-2 rounded-2xl p-3 flex flex-col justify-between overflow-hidden transition-all ${
                     isCorrect
-                      ? 'border-primary bg-primary/20 shadow-[0_0_20px_rgba(0,255,255,0.2)]'
+                      ? 'border-primary bg-primary/15 shadow-[0_0_15px_rgba(0,255,255,0.15)]'
                       : isPicked
-                        ? 'border-red-500 bg-red-500/20'
-                        : 'border-gray-700 bg-gray-800 opacity-30'
+                        ? 'border-red-500 bg-red-500/15'
+                        : 'border-gray-800 bg-gray-900/30 opacity-30'
                   }`}>
-                    <div className="flex items-center justify-between">
-                      <span className="text-xl font-medium">{choice}</span>
-                      {isCorrect && <CheckCircle2 className="text-primary" size={24} />}
-                      {!isCorrect && isPicked && <XCircle className="text-red-400" size={24} />}
-                    </div>
+                    <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg text-white font-bold text-sm mb-2 flex-shrink-0 ${
+                      isCorrect ? 'bg-primary text-background' : isPicked ? 'bg-red-500' : c.label
+                    }`}>
+                      {String.fromCharCode(65 + idx)}
+                    </span>
+                    <span className="text-white font-medium text-sm leading-snug">{choice}</span>
+                    {isCorrect && <CheckCircle2 size={14} className="absolute top-2 right-2 text-primary" />}
+                    {!isCorrect && isPicked && <XCircle size={14} className="absolute top-2 right-2 text-red-400" />}
                   </div>
                 )
               })}
             </div>
 
-            {revealedResult ? (
-              <div className={`text-center p-8 rounded-3xl border backdrop-blur-md ${
-                revealedResult.didNotAnswer ? 'bg-gray-900/80 border-gray-700'
-                  : revealedResult.is_correct ? 'bg-primary/10 border-primary shadow-[0_0_40px_rgba(0,255,255,0.15)]'
-                  : 'bg-red-900/20 border-red-700'
-              }`}>
-                {revealedResult.didNotAnswer ? (
-                  <>
-                    <AlertCircle size={56} className="mx-auto mb-4 text-gray-500" />
-                    <h3 className="text-3xl font-bold text-gray-400">Time's Up!</h3>
-                    <p className="text-gray-500 mt-2">You didn't answer this one.</p>
-                  </>
-                ) : revealedResult.is_correct ? (
-                  <>
-                    <CheckCircle2 size={56} className="mx-auto mb-4 text-primary" />
-                    <h3 className="text-3xl font-bold text-primary">Correct!</h3>
-                    {revealedResult.is_first_correct ? (
-                      <div className="inline-flex items-center gap-2 bg-[#FFD700]/20 text-[#FFD700] px-4 py-2 rounded-full font-bold mt-4">
-                        <Trophy size={16} /> Fastest correct answer! +1 Point
-                      </div>
-                    ) : revealedResult.behind_ms != null && (
-                      <div className="inline-flex items-center gap-2 bg-gray-700/60 text-gray-300 px-4 py-2 rounded-full font-mono text-sm mt-4">
-                        <Clock size={14} /> {revealedResult.behind_ms}ms behind the winner
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <XCircle size={56} className="mx-auto mb-4 text-red-400" />
-                    <h3 className="text-3xl font-bold text-red-400">Incorrect!</h3>
-                  </>
-                )}
-                <p className="text-gray-500 mt-4 flex items-center justify-center gap-2 text-sm">
-                  <AlertCircle size={16} /> Waiting for host to advance...
-                </p>
-              </div>
-            ) : (
-              <div className="text-center text-gray-500">
-                <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-2" />
-                <p>Loading result...</p>
-              </div>
-            )}
+            {/* Result card */}
+            <div className="flex-1 flex items-center">
+              {revealedResult ? (
+                <div className={`w-full p-5 rounded-2xl border ${
+                  revealedResult.didNotAnswer
+                    ? 'bg-gray-900/80 border-gray-700'
+                    : revealedResult.is_correct
+                      ? 'bg-primary/10 border-primary shadow-[0_0_30px_rgba(0,255,255,0.1)]'
+                      : 'bg-red-900/20 border-red-700'
+                }`}>
+                  {revealedResult.didNotAnswer ? (
+                    <div className="text-center">
+                      <AlertCircle size={40} className="mx-auto mb-2 text-gray-500" />
+                      <h3 className="text-xl font-bold text-gray-400">انتهى الوقت!</h3>
+                      {revealedResult.winner_nickname && (
+                        <p className="text-gray-500 text-sm mt-1">
+                          الأول: <span className="text-[#FFD700] font-bold">{revealedResult.winner_nickname}</span>
+                        </p>
+                      )}
+                    </div>
+                  ) : revealedResult.is_correct ? (
+                    <div className="text-center">
+                      <CheckCircle2 size={40} className="mx-auto mb-2 text-primary" />
+                      <h3 className="text-2xl font-bold text-primary">صح! 🎉</h3>
+
+                      {revealedResult.is_first_correct ? (
+                        <div className="flex flex-col items-center gap-2 mt-3">
+                          <div className="inline-flex items-center gap-2 bg-[#FFD700]/20 text-[#FFD700] px-4 py-1.5 rounded-full font-bold text-sm">
+                            <Trophy size={14} /> الأول على الإجابة الصحيحة!
+                          </div>
+                          {revealedResult.points_earned > 0 && (
+                            <span className="text-primary font-mono font-bold text-lg">+{revealedResult.points_earned} نقطة</span>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="flex flex-col items-center gap-2 mt-3">
+                          {revealedResult.winner_nickname && (
+                            <p className="text-gray-400 text-sm">
+                              الأول: <span className="text-[#FFD700] font-bold">{revealedResult.winner_nickname}</span>
+                            </p>
+                          )}
+                          <div className="flex items-center gap-3">
+                            {revealedResult.behind_ms != null && (
+                              <div className="inline-flex items-center gap-1 bg-gray-700/60 text-gray-300 px-3 py-1 rounded-full font-mono text-xs">
+                                <Clock size={11} /> {revealedResult.behind_ms}ms متأخر
+                              </div>
+                            )}
+                            {revealedResult.points_earned > 0 && (
+                              <span className="text-primary font-mono font-bold">+{revealedResult.points_earned} نقطة</span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-center">
+                      <XCircle size={40} className="mx-auto mb-2 text-red-400" />
+                      <h3 className="text-2xl font-bold text-red-400">غلط!</h3>
+                      {revealedResult.winner_nickname && (
+                        <p className="text-gray-500 text-sm mt-1">
+                          الأول: <span className="text-[#FFD700] font-bold">{revealedResult.winner_nickname}</span>
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  <p className="text-gray-600 mt-3 flex items-center justify-center gap-1.5 text-xs">
+                    <AlertCircle size={12} /> في انتظار الهوست...
+                  </p>
+                </div>
+              ) : (
+                <div className="w-full text-center text-gray-500 py-4">
+                  <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+                  <p className="text-sm">جاري التحميل...</p>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
-        {/* FINISHED */}
+        {/* ── FINISHED ───────────────────────────────────────────────────── */}
         {room.status === 'finished' && (
-          <div className="text-center animate-in fade-in duration-1000">
-            <Trophy size={100} className="mx-auto text-[#FFD700] mb-8" />
-            <h1 className="text-6xl font-display font-bold text-white mb-4">Game Over!</h1>
-            <p className="text-2xl text-gray-400 mb-8">
-              You finished with a score of <span className="text-primary font-bold">{player.score}</span>
-            </p>
-            <button onClick={() => navigate('/')} className="bg-gray-800 hover:bg-gray-700 text-white font-bold py-3 px-8 rounded-xl transition-colors">
-              Return Home
-            </button>
+          <div className="flex-1 flex items-center justify-center">
+            <div className="text-center">
+              <Trophy size={80} className="mx-auto text-[#FFD700] mb-6" />
+              <h1 className="text-5xl font-display font-bold mb-3">انتهت!</h1>
+              <p className="text-xl text-gray-400 mb-2">نقاطك النهائية</p>
+              <p className="text-5xl font-mono font-bold text-primary mb-8">{player.score}</p>
+              {/* Mini final leaderboard */}
+              {leaderboard.length > 0 && (
+                <div className="space-y-2 max-w-xs mx-auto mb-8">
+                  {leaderboard.slice(0, 5).map((p, i) => (
+                    <div key={p.user_id} className={`flex items-center justify-between px-4 py-2 rounded-xl text-sm ${
+                      p.user_id === myId ? 'bg-primary/20 border border-primary text-primary' : 'bg-gray-800 border border-gray-700'
+                    }`}>
+                      <span className="font-bold">#{i + 1} {p.nickname}</span>
+                      <span className="font-mono font-bold">{p.score}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <button onClick={() => navigate('/')}
+                className="bg-gray-800 hover:bg-gray-700 text-white font-bold py-3 px-8 rounded-xl transition-colors">
+                الرئيسية
+              </button>
+            </div>
           </div>
         )}
       </div>
