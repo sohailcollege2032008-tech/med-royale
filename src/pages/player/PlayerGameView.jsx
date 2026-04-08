@@ -48,13 +48,13 @@ function MiniLeaderboard({ players, myId }) {
   )
 }
 
-// ── Choice button ─────────────────────────────────────────────────────────────
-const CHOICE_COLORS = [
-  { base: 'border-[#E21B3C] bg-[#E21B3C]/10 hover:bg-[#E21B3C]/20',   label: 'bg-[#E21B3C]' },
-  { base: 'border-[#1368CE] bg-[#1368CE]/10 hover:bg-[#1368CE]/20',   label: 'bg-[#1368CE]' },
-  { base: 'border-[#D89E00] bg-[#D89E00]/10 hover:bg-[#D89E00]/20',   label: 'bg-[#D89E00]' },
-  { base: 'border-[#26890C] bg-[#26890C]/10 hover:bg-[#26890C]/20',   label: 'bg-[#26890C]' },
-]
+// ── Dynamic font size for question text ───────────────────────────────────────
+function questionFontClass(text = '') {
+  const len = text.length
+  if (len > 220) return 'text-sm'
+  if (len > 120) return 'text-base'
+  return 'text-lg'
+}
 
 export default function PlayerGameView() {
   const { roomId }   = useParams()
@@ -269,7 +269,7 @@ export default function PlayerGameView() {
       </div>
 
       {/* Main area */}
-      <div className="flex-1 flex flex-col items-center overflow-hidden px-4 pt-4 pb-4">
+      <div className="flex-1 flex flex-col items-center overflow-y-auto px-4 pt-4 pb-4">
 
         {/* ── LOBBY ──────────────────────────────────────────────────────── */}
         {room.status === 'lobby' && (
@@ -286,66 +286,65 @@ export default function PlayerGameView() {
 
         {/* ── PLAYING ────────────────────────────────────────────────────── */}
         {room.status === 'playing' && currentQ && (
-          <div className="w-full max-w-2xl flex flex-col gap-3 h-full">
+          <div className="w-full max-w-2xl flex flex-col gap-3">
 
             {/* Mini leaderboard */}
             <MiniLeaderboard players={leaderboard} myId={myId} />
 
-            {/* Question card — fixed height, scrollable text */}
+            {/* Question card */}
             <div className="bg-gray-900/80 rounded-2xl border border-gray-800 p-4 flex-shrink-0">
               <span className="text-primary font-bold text-xs tracking-widest uppercase block mb-2">
                 سؤال {room.current_question_index + 1} / {room.questions.questions.length}
               </span>
-              {/* Question text — scrollable if long */}
-              <div className="max-h-28 overflow-y-auto">
-                <p className="text-white font-bold text-base leading-snug">{currentQ.question}</p>
-              </div>
+              <p className={`text-white font-bold ${questionFontClass(currentQ.question)} leading-snug`}>
+                {currentQ.question}
+              </p>
               {currentQ.image_url && (
                 <img src={currentQ.image_url} alt="q" className="mt-3 w-full max-h-36 object-contain rounded-xl border border-gray-700 bg-gray-950" />
               )}
             </div>
 
-            {/* Choices — always visible, fill remaining space */}
+            {/* Choices */}
             {!answerLocked ? (
-              <div className="grid grid-cols-2 gap-2 flex-1">
-                {currentQ.choices.map((choice, idx) => {
-                  const c = CHOICE_COLORS[idx % CHOICE_COLORS.length]
-                  return (
-                    <button key={idx} onClick={() => handleChoiceClick(idx)}
-                      className={`relative border-2 rounded-2xl p-3 text-left active:scale-95 transition-transform overflow-hidden flex flex-col justify-between ${c.base}`}>
-                      <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg text-white font-bold text-sm mb-2 flex-shrink-0 ${c.label}`}>
-                        {String.fromCharCode(65 + idx)}
-                      </span>
-                      <span className="text-white font-medium text-sm leading-snug">{choice}</span>
-                    </button>
-                  )
-                })}
+              <div className="grid grid-cols-2 gap-2">
+                {currentQ.choices.map((choice, idx) => (
+                  <button key={idx} onClick={() => handleChoiceClick(idx)}
+                    className="flex items-center gap-3 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-xl px-4 py-3 text-left transition-all active:scale-95 group">
+                    <span className="w-8 h-8 rounded-lg bg-gray-700 group-hover:bg-primary/20 text-gray-300 group-hover:text-primary font-bold flex-shrink-0 flex items-center justify-center text-sm transition-colors">
+                      {String.fromCharCode(65 + idx)}
+                    </span>
+                    <span className="text-white font-medium text-sm leading-snug">{choice}</span>
+                  </button>
+                ))}
               </div>
             ) : (
               <>
-                <div className="grid grid-cols-2 gap-2 flex-1">
+                <div className="grid grid-cols-2 gap-2">
                   {currentQ.choices.map((choice, idx) => {
                     const isPicked = idx === selectedChoice
-                    const c = CHOICE_COLORS[idx % CHOICE_COLORS.length]
                     return (
-                      <div key={idx} className={`relative border-2 rounded-2xl p-3 flex flex-col justify-between overflow-hidden transition-all ${
+                      <div key={idx} className={`flex items-center gap-3 border rounded-xl px-4 py-3 transition-all ${
                         isPicked
-                          ? `${c.base} scale-[1.02] shadow-lg`
-                          : 'border-gray-800 bg-gray-900/40 opacity-40'
+                          ? 'bg-primary/10 border-primary'
+                          : 'bg-gray-900/50 border-gray-800 opacity-40'
                       }`}>
-                        <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg text-white font-bold text-sm mb-2 flex-shrink-0 ${isPicked ? c.label : 'bg-gray-700'}`}>
+                        <span className={`w-8 h-8 rounded-lg font-bold flex-shrink-0 flex items-center justify-center text-sm ${
+                          isPicked ? 'bg-primary text-background' : 'bg-gray-700 text-gray-400'
+                        }`}>
                           {String.fromCharCode(65 + idx)}
                         </span>
-                        <span className="text-white font-medium text-sm leading-snug">{choice}</span>
-                        {isPicked && <Zap size={14} className="absolute top-2 right-2 text-white/60" fill="currentColor" />}
+                        <span className={`font-medium text-sm leading-snug ${isPicked ? 'text-white' : 'text-gray-400'}`}>
+                          {choice}
+                        </span>
+                        {isPicked && <Zap size={13} className="ml-auto flex-shrink-0 text-primary" fill="currentColor" />}
                       </div>
                     )
                   })}
                 </div>
-                <div className="flex-shrink-0 py-2 text-center">
+                <div className="py-2 text-center">
                   <div className="inline-flex items-center gap-2 bg-gray-900 border border-gray-700 px-4 py-2 rounded-full">
                     <div className="w-1.5 h-1.5 bg-primary rounded-full animate-pulse" />
-                    <span className="text-gray-400 text-sm">في انتظار الكشف...</span>
+                    <span className="ar text-gray-400 text-sm">في انتظار الكشف...</span>
                   </div>
                 </div>
               </>
@@ -355,16 +354,16 @@ export default function PlayerGameView() {
 
         {/* ── REVEALING ──────────────────────────────────────────────────── */}
         {room.status === 'revealing' && currentQ && (
-          <div className="w-full max-w-2xl flex flex-col gap-3 h-full">
+          <div className="w-full max-w-2xl flex flex-col gap-3">
 
             {/* Mini leaderboard */}
             <MiniLeaderboard players={leaderboard} myId={myId} />
 
             {/* Question */}
             <div className="bg-gray-900/80 rounded-2xl border border-gray-800 p-4 flex-shrink-0">
-              <div className="max-h-20 overflow-y-auto">
-                <p className="text-gray-400 font-medium text-sm leading-snug">{currentQ.question}</p>
-              </div>
+              <p className={`text-gray-300 font-medium ${questionFontClass(currentQ.question)} leading-snug`}>
+                {currentQ.question}
+              </p>
               {currentQ.image_url && (
                 <img src={currentQ.image_url} alt="q" className="mt-2 w-full max-h-28 object-contain rounded-xl border border-gray-700 bg-gray-950" />
               )}
@@ -375,23 +374,24 @@ export default function PlayerGameView() {
               {currentQ.choices.map((choice, idx) => {
                 const isCorrect = idx === currentQ.correct
                 const isPicked  = idx === selectedChoice
-                const c = CHOICE_COLORS[idx % CHOICE_COLORS.length]
                 return (
-                  <div key={idx} className={`relative border-2 rounded-2xl p-3 flex flex-col justify-between overflow-hidden transition-all ${
+                  <div key={idx} className={`flex items-center gap-3 border rounded-xl px-4 py-3 transition-all ${
                     isCorrect
-                      ? 'border-primary bg-primary/15 shadow-[0_0_15px_rgba(0,255,255,0.15)]'
+                      ? 'bg-primary/15 border-primary shadow-[0_0_12px_rgba(0,255,255,0.12)]'
                       : isPicked
-                        ? 'border-red-500 bg-red-500/15'
-                        : 'border-gray-800 bg-gray-900/30 opacity-30'
+                        ? 'bg-red-500/15 border-red-500'
+                        : 'bg-gray-900/30 border-gray-800 opacity-30'
                   }`}>
-                    <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg text-white font-bold text-sm mb-2 flex-shrink-0 ${
-                      isCorrect ? 'bg-primary text-background' : isPicked ? 'bg-red-500' : c.label
+                    <span className={`w-8 h-8 rounded-lg font-bold flex-shrink-0 flex items-center justify-center text-sm ${
+                      isCorrect ? 'bg-primary text-background' : isPicked ? 'bg-red-500 text-white' : 'bg-gray-700 text-gray-400'
                     }`}>
                       {String.fromCharCode(65 + idx)}
                     </span>
-                    <span className="text-white font-medium text-sm leading-snug">{choice}</span>
-                    {isCorrect && <CheckCircle2 size={14} className="absolute top-2 right-2 text-primary" />}
-                    {!isCorrect && isPicked && <XCircle size={14} className="absolute top-2 right-2 text-red-400" />}
+                    <span className={`font-medium text-sm leading-snug ${isCorrect || isPicked ? 'text-white' : 'text-gray-400'}`}>
+                      {choice}
+                    </span>
+                    {isCorrect && <CheckCircle2 size={14} className="ml-auto flex-shrink-0 text-primary" />}
+                    {!isCorrect && isPicked && <XCircle size={14} className="ml-auto flex-shrink-0 text-red-400" />}
                   </div>
                 )
               })}
@@ -408,7 +408,7 @@ export default function PlayerGameView() {
                       : 'bg-red-900/20 border-red-700'
                 }`}>
                   {revealedResult.didNotAnswer ? (
-                    <div className="text-center">
+                    <div className="ar text-center">
                       <AlertCircle size={40} className="mx-auto mb-2 text-gray-500" />
                       <h3 className="text-xl font-bold text-gray-400">انتهى الوقت!</h3>
                       {revealedResult.winner_nickname && (
@@ -418,7 +418,7 @@ export default function PlayerGameView() {
                       )}
                     </div>
                   ) : revealedResult.is_correct ? (
-                    <div className="text-center">
+                    <div className="ar text-center">
                       <CheckCircle2 size={40} className="mx-auto mb-2 text-primary" />
                       <h3 className="text-2xl font-bold text-primary">صح! 🎉</h3>
 
@@ -452,7 +452,7 @@ export default function PlayerGameView() {
                       )}
                     </div>
                   ) : (
-                    <div className="text-center">
+                    <div className="ar text-center">
                       <XCircle size={40} className="mx-auto mb-2 text-red-400" />
                       <h3 className="text-2xl font-bold text-red-400">غلط!</h3>
                       {revealedResult.winner_nickname && (
@@ -462,7 +462,7 @@ export default function PlayerGameView() {
                       )}
                     </div>
                   )}
-                  <p className="text-gray-600 mt-3 flex items-center justify-center gap-1.5 text-xs">
+                  <p className="ar text-gray-600 mt-3 flex items-center justify-center gap-1.5 text-xs">
                     <AlertCircle size={12} /> في انتظار الهوست...
                   </p>
                 </div>

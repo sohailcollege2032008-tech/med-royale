@@ -221,9 +221,9 @@ function FileUploadTab({ session, onSuccess, onClose }) {
             onChange={(e) => processFile(e.target.files[0])}
           />
           <div className="text-5xl mb-3">📂</div>
-          <p className="text-gray-200 font-bold text-lg">اسحب الملف هنا أو انقر للاختيار</p>
+          <p className="ar text-gray-200 font-bold text-lg">اسحب الملف هنا أو انقر للاختيار</p>
           <p className="text-gray-500 text-sm mt-2 font-mono">PDF · PPTX · DOCX · صورة</p>
-          <p className="text-gray-600 text-xs mt-3">
+          <p className="ar text-gray-600 text-xs mt-3">
             الملف بيتبعت لـ Gemini 3.1 Flash Lite مباشرة ويطلع JSON تلقائياً
           </p>
         </div>
@@ -235,18 +235,18 @@ function FileUploadTab({ session, onSuccess, onClose }) {
           <div className="flex justify-center">
             <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin" />
           </div>
-          <p className="text-primary font-bold">{statusMsg}</p>
-          <p className="text-gray-500 text-xs">لا تغلق النافذة</p>
+          <p className="ar text-primary font-bold">{statusMsg}</p>
+          <p className="ar text-gray-500 text-xs">لا تغلق النافذة</p>
         </div>
       )}
 
       {/* Error state */}
       {status === 'error' && (
         <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-5 space-y-3">
-          <p className="text-red-400 font-bold">❌ {statusMsg}</p>
+          <p className="ar text-red-400 font-bold">❌ {statusMsg}</p>
           <button
             onClick={reset}
-            className="text-sm text-gray-400 hover:text-white underline transition-colors"
+            className="ar text-sm text-gray-400 hover:text-white underline transition-colors"
           >
             ← حاول مرة تانية
           </button>
@@ -331,7 +331,7 @@ function JsonUploadTab({ session, onSuccess, onClose }) {
       >
         <input ref={fileInputRef} type="file" accept=".json" className="hidden" onChange={(e) => processFile(e.target.files[0])} />
         <div className="text-5xl mb-3">📄</div>
-        <p className="text-gray-300 font-bold text-lg">اسحب ملف JSON هنا أو انقر للاختيار</p>
+        <p className="ar text-gray-300 font-bold text-lg">اسحب ملف JSON هنا أو انقر للاختيار</p>
         <p className="text-gray-500 text-sm mt-1 font-mono">.json only</p>
       </div>
 
@@ -362,8 +362,8 @@ function AiPromptTab() {
   return (
     <div className="space-y-4">
       <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4">
-        <p className="text-amber-300 text-sm font-bold mb-1">📋 لو عايز تستخدم AI خارجي</p>
-        <ol className="text-gray-300 text-sm space-y-1 list-decimal list-inside">
+        <p className="ar text-amber-300 text-sm font-bold mb-1">📋 لو عايز تستخدم AI خارجي</p>
+        <ol className="ar text-gray-300 text-sm space-y-1 list-decimal list-inside">
           <li>انسخ البرومت أدناه</li>
           <li>افتح ChatGPT أو Gemini أو Claude</li>
           <li>أرسل البرومت مع ملفك (PDF / PPTX / صورة)</li>

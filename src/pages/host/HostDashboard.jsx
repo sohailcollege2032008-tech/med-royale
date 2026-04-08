@@ -147,8 +147,8 @@ export default function HostDashboard() {
           ) : banks.length === 0 ? (
             <div className="text-center py-14 space-y-3">
               <div className="text-5xl">📚</div>
-              <p className="text-gray-400 font-bold text-lg">مفيش بنوك أسئلة لحد دلوقتي</p>
-              <p className="text-gray-600 text-sm">ارفع ملف JSON أو استخدم الذكاء الاصطناعي لاستخراج الأسئلة</p>
+              <p className="ar text-gray-400 font-bold text-lg">مفيش بنوك أسئلة لحد دلوقتي</p>
+              <p className="ar text-gray-600 text-sm">ارفع ملف JSON أو استخدم الذكاء الاصطناعي لاستخراج الأسئلة</p>
               <button
                 onClick={() => setShowUpload(true)}
                 className="mt-2 bg-primary/10 border border-primary/30 text-primary px-6 py-2 rounded-xl hover:bg-primary/20 transition-all font-bold text-sm"

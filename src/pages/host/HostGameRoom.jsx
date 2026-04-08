@@ -59,7 +59,7 @@ function GameConfigPanel({ config, onChange }) {
       <label className="flex items-center justify-between cursor-pointer select-none">
         <div className="flex items-center gap-2">
           <Shuffle size={15} className="text-gray-400" />
-          <span className="text-sm text-gray-200 font-medium">ترتيب الاختيارات عشوائي</span>
+          <span className="ar text-sm text-gray-200 font-medium">ترتيب الاختيارات عشوائي</span>
         </div>
         <button
           onClick={() => set('shuffle_choices', !config.shuffle_choices)}
@@ -71,7 +71,7 @@ function GameConfigPanel({ config, onChange }) {
 
       {/* Scoring mode */}
       <div>
-        <p className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-3">نظام التقييم</p>
+        <p className="ar text-xs text-gray-500 font-bold mb-3">نظام التقييم</p>
         <div className="space-y-2">
 
           {/* Classic */}
@@ -80,7 +80,7 @@ function GameConfigPanel({ config, onChange }) {
             <div className={`w-4 h-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${config.scoring_mode === 'classic' ? 'border-primary' : 'border-gray-600'}`}>
               {config.scoring_mode === 'classic' && <div className="w-2 h-2 bg-primary rounded-full" />}
             </div>
-            <div>
+            <div className="ar">
               <p className="text-sm font-bold text-white">كلاسيك</p>
               <p className="text-xs text-gray-500">أول واحد صح ياخد نقطة، الباقي صفر</p>
             </div>
@@ -92,7 +92,7 @@ function GameConfigPanel({ config, onChange }) {
             <div className={`w-4 h-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${config.scoring_mode === 'custom' ? 'border-primary' : 'border-gray-600'}`}>
               {config.scoring_mode === 'custom' && <div className="w-2 h-2 bg-primary rounded-full" />}
             </div>
-            <div>
+            <div className="ar">
               <p className="text-sm font-bold text-white">كاستوم</p>
               <p className="text-xs text-gray-500">أول واحد صح N نقطة، الباقي الصح M نقطة</p>
             </div>
@@ -127,7 +127,7 @@ function GameConfigPanel({ config, onChange }) {
             <div className={`w-4 h-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${config.scoring_mode === 'ranked' ? 'border-primary' : 'border-gray-600'}`}>
               {config.scoring_mode === 'ranked' && <div className="w-2 h-2 bg-primary rounded-full" />}
             </div>
-            <div>
+            <div className="ar">
               <p className="text-sm font-bold text-white">ترتيبي</p>
               <p className="text-xs text-gray-500">الأول N، الثاني N−X، الثالث N−2X…</p>
             </div>

@@ -54,6 +54,13 @@ body {
   margin: 0;
 }
 
+/* Arabic RTL text helper — add to any container of Arabic text */
+.ar {
+  direction: rtl;
+  text-align: right;
+  unicode-bidi: embed;
+}
+
 #root {
   width: 1126px;
   max-width: 100%;
