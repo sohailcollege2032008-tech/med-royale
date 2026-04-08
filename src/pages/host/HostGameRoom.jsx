@@ -196,16 +196,18 @@ export default function HostGameRoom() {
 
       const winner = correctAnswers[0] || null
 
-      // Build score updates: +1 per correct, +1 bonus for fastest
+      // Only the FIRST correct answer gets a point — everyone else gets 0
       const scoreUpdates = {}
-      for (const answer of answersData) {
-        if (answer.selected_choice === correctChoice) {
-          const isFirst = winner && answer.user_id === winner.user_id
-          const bonus = isFirst ? 1 : 0
-          const playerRef = `rooms/${roomId}/players/${answer.user_id}/score`
-          const playerSnap = await get(ref(rtdb, playerRef))
-          scoreUpdates[playerRef] = (playerSnap.val() || 0) + 1 + bonus
-        }
+      if (winner) {
+        const playerRef = `rooms/${roomId}/players/${winner.user_id}/score`
+        const playerSnap = await get(ref(rtdb, playerRef))
+        scoreUpdates[playerRef] = (playerSnap.val() || 0) + 1
+      }
+
+      // Mark the winner's answer as is_first_correct so PlayerGameView can show the badge
+      const answerUpdates = {}
+      if (winner) {
+        answerUpdates[`rooms/${roomId}/answers/${qIdx}/${winner.user_id}/is_first_correct`] = true
       }
 
       // Store winner info in room for display
@@ -215,6 +217,7 @@ export default function HostGameRoom() {
 
       await update(ref(rtdb), {
         ...scoreUpdates,
+        ...answerUpdates,
         [`rooms/${roomId}/status`]: 'revealing',
         [`rooms/${roomId}/reveal_data`]: revealData
       })
