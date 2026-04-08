@@ -394,7 +394,13 @@ export default function HostGameRoom() {
                 </div>
               )}
 
-              <h2 className="text-3xl font-bold mb-8">{currentQuestion.question}</h2>
+              <h2 className="text-3xl font-bold mb-6">{currentQuestion.question}</h2>
+
+              {currentQuestion.image_url && (
+                <div className="mb-6 rounded-xl overflow-hidden border border-gray-700 bg-gray-900">
+                  <img src={currentQuestion.image_url} alt="question" className="w-full max-h-72 object-contain" />
+                </div>
+              )}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {currentQuestion.choices.map((choice, i) => {

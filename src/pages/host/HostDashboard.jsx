@@ -5,6 +5,7 @@ import { db, rtdb } from '../../lib/firebase'
 import { useAuthStore } from '../../stores/authStore'
 import { Link, useNavigate } from 'react-router-dom'
 import UploadQuestionsModal from '../../components/host/UploadQuestionsModal'
+import QuestionBankModal from '../../components/host/QuestionBankModal'
 
 export default function HostDashboard() {
   const profile = useAuthStore(state => state.profile)
@@ -13,6 +14,7 @@ export default function HostDashboard() {
   const [loading, setLoading] = useState(true)
   const [showUpload, setShowUpload] = useState(false)
   const [deletingId, setDeletingId] = useState(null)
+  const [selectedBank, setSelectedBank] = useState(null)
 
   useEffect(() => {
     if (profile) fetchBanks()
@@ -90,6 +92,19 @@ export default function HostDashboard() {
     }
 
     alert('Error creating room after multiple attempts')
+  }
+
+  const handleBankUpdate = (bankId, updatedQuestions, updatedTitle) => {
+    setBanks(prev => prev.map(b =>
+      b.id === bankId
+        ? { ...b, questions: updatedQuestions, title: updatedTitle, question_count: updatedQuestions.questions.length }
+        : b
+    ))
+    // Update selectedBank so modal reflects changes immediately
+    setSelectedBank(prev => prev && prev.id === bankId
+      ? { ...prev, questions: updatedQuestions, title: updatedTitle }
+      : prev
+    )
   }
 
   const handleSignOut = async () => {
@@ -176,6 +191,12 @@ export default function HostDashboard() {
                       {deletingId === bank.id ? '...' : '🗑 حذف'}
                     </button>
                   </div>
+                  <button
+                    onClick={() => setSelectedBank(bank)}
+                    className="w-full mt-2 bg-primary/10 text-primary py-2 rounded-lg hover:bg-primary/20 transition-colors font-bold text-sm border border-primary/30"
+                  >
+                    عرض وتعديل
+                  </button>
                 </div>
               ))}
             </div>
@@ -187,6 +208,14 @@ export default function HostDashboard() {
         <UploadQuestionsModal
           onClose={() => setShowUpload(false)}
           onSuccess={fetchBanks}
+        />
+      )}
+
+      {selectedBank && (
+        <QuestionBankModal
+          bank={selectedBank}
+          onClose={() => setSelectedBank(null)}
+          onUpdate={handleBankUpdate}
         />
       )}
     </div>

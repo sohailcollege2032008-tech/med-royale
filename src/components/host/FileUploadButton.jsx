@@ -19,6 +19,7 @@ Your task is to extract ALL questions from the document and return them in this 
       "choices": ["<choice A>", "<choice B>", "<choice C>", "<choice D>"],
       "correct": <0-indexed position of the correct answer>,
       "time_limit": 20,
+      "needs_image": false,
       "image_url": null
     }
   ]
@@ -32,7 +33,8 @@ RULES:
 5. Preserve the original wording of questions and choices exactly as written.
 6. If choices are labeled A/B/C/D or 1/2/3/4, remove the labels and just keep the text.
 7. Set time_limit to 20 for normal questions, 30 for long/complex ones, 10 for simple recall.
-8. Return ONLY the JSON object. No markdown backticks, no commentary.`
+8. Set "needs_image" to true if the question refers to a figure, image, photograph, diagram, graph, table, or any visual element that is required to answer correctly. Set to false otherwise.
+9. Return ONLY the JSON object. No markdown backticks, no commentary.`
 
 export default function FileUploadButton({ onUploadSuccess }) {
   const [loading, setLoading] = useState(false)

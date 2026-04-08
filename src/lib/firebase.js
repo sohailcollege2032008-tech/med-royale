@@ -2,6 +2,7 @@ import { initializeApp } from 'firebase/app'
 import { getAuth } from 'firebase/auth'
 import { getFirestore } from 'firebase/firestore'
 import { getDatabase } from 'firebase/database'
+import { getStorage } from 'firebase/storage'
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -23,3 +24,6 @@ export const db = getFirestore(app)
 
 // Realtime Database - for live game data: rooms, players, answers, join_requests
 export const rtdb = getDatabase(app)
+
+// Storage - for question images
+export const storage = getStorage(app)

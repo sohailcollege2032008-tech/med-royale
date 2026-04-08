@@ -258,8 +258,13 @@ export default function PlayerGameView() {
                     Question {room.current_question_index + 1}
                   </span>
                   <h2 className="text-3xl md:text-5xl font-bold leading-tight">{currentQuestion.question}</h2>
+                  {currentQuestion.image_url && (
+                    <div className="mt-6 rounded-xl overflow-hidden border border-gray-700 bg-gray-900">
+                      <img src={currentQuestion.image_url} alt="question" className="w-full max-h-64 object-contain" />
+                    </div>
+                  )}
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-12">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
                   {currentQuestion.choices.map((choice, idx) => (
                     <button
                       key={idx}
@@ -279,6 +284,11 @@ export default function PlayerGameView() {
                     Question {room.current_question_index + 1}
                   </span>
                   <h2 className="text-2xl md:text-3xl font-bold leading-tight text-gray-300">{currentQuestion.question}</h2>
+                  {currentQuestion.image_url && (
+                    <div className="mt-4 rounded-xl overflow-hidden border border-gray-700 bg-gray-900">
+                      <img src={currentQuestion.image_url} alt="question" className="w-full max-h-48 object-contain" />
+                    </div>
+                  )}
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
                   {currentQuestion.choices.map((choice, idx) => {
@@ -311,6 +321,11 @@ export default function PlayerGameView() {
           <div className="max-w-4xl w-full animate-in fade-in zoom-in duration-500">
             <div className="text-center mb-8">
               <h2 className="text-2xl font-bold text-gray-400">{currentQuestion.question}</h2>
+              {currentQuestion.image_url && (
+                <div className="mt-4 rounded-xl overflow-hidden border border-gray-700 bg-gray-900">
+                  <img src={currentQuestion.image_url} alt="question" className="w-full max-h-48 object-contain" />
+                </div>
+              )}
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
               {currentQuestion.choices.map((choice, idx) => {
