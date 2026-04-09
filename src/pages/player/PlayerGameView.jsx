@@ -6,6 +6,8 @@ import { useAuth } from '../../hooks/useAuth'
 import { useServerClock } from '../../hooks/useServerClock'
 import { Trophy, Clock, CheckCircle2, XCircle, AlertCircle, Zap, WifiOff, Download, Loader2, Edit2, Check, X } from 'lucide-react'
 import confetti from 'canvas-confetti'
+import { signAnswer, validateReactionTime } from '../../utils/crypto'
+import { initActivityLogger, getActivityLogger, logActivity } from '../../utils/activityLogger'
 
 // ── Mini leaderboard strip ────────────────────────────────────────────────────
 // top5: [{rank, user_id, nickname, score}] — from rooms/${roomId}/leaderboard/top5
@@ -244,7 +246,7 @@ export default function PlayerGameView() {
     }
   }
 
-  // ── Submit answer ─────────────────────────────────────────────────────────
+  // ── Submit answer with cryptographic signing ──────────────────────────────────
   const handleChoiceClick = async (choiceIndex) => {
     if (answerLocked || !room || !session) return
 
@@ -256,21 +258,77 @@ export default function PlayerGameView() {
     setSelectedChoice(choiceIndex)
     setAnswerLocked(true)
 
-    const uid          = session.uid
-    const qIdx         = room.current_question_index
-    const correctChoice = room.questions.questions[qIdx].correct
-    const isCorrect    = choiceIndex === correctChoice
-    const answerRef    = ref(rtdb, `rooms/${roomId}/answers/${qIdx}/${uid}`)
+    // Initialize activity logger if not already done
+    let logger = getActivityLogger()
+    if (!logger) {
+      logger = initActivityLogger(session.uid, roomId)
+    }
 
+    const uid    = session.uid
+    const qIdx   = room.current_question_index
+
+    // SECURITY: Validate reaction time (detect impossible speeds)
+    const questionLimit = room.config?.timer_seconds || 30
+    const timeValidation = validateReactionTime(reactionMs, questionLimit)
+    const isAnomalous = timeValidation.isAnomalous
+
+    if (isAnomalous) {
+      logger.addLog('anomalous_reaction_time', {
+        reaction_time_ms: reactionMs,
+        reason: timeValidation.reason,
+        question_index: qIdx
+      })
+    }
+
+    // SECURITY: Prepare answer for signing (NO is_correct field!)
+    const answerData = {
+      selected_choice: choiceIndex,
+      reaction_time: reactionMs,
+      timestamp: Date.now(),
+      room_id: roomId,
+      user_id: uid,
+      question_index: qIdx
+    }
+
+    // SECURITY: Get game secret (stored in room config or generated per room)
+    let gameSecret = room.game_secret || 'default-secret-' + roomId
+    if (!room.game_secret) {
+      // If no secret in room, use room ID + created timestamp to make it harder to predict
+      gameSecret = 'secure-' + roomId + '-' + (room.created_at || 'generated')
+    }
+
+    // SECURITY: Sign the answer to prevent tampering
+    let signature = null
+    try {
+      signature = await signAnswer(answerData, gameSecret)
+    } catch (err) {
+      console.error('Failed to sign answer:', err)
+      logger.addLog('signing_error', { error: err.message, question_index: qIdx })
+      alert('Security error: Failed to encrypt your answer. Please try again.')
+      setAnswerLocked(false)
+      return
+    }
+
+    // Log the submission
+    logger.logAnswerSubmission({
+      ...answerData,
+      signature: signature.substring(0, 16) + '...' // Log partial signature for record
+    })
+
+    const answerRef = ref(rtdb, `rooms/${roomId}/answers/${qIdx}/${uid}`)
+
+    // SECURITY: Submit answer WITHOUT is_correct field
+    // Server/Host will verify the answer using the signature and correct answer hash
     await runTransaction(answerRef, current => {
       if (current !== null) return undefined  // already answered — abort
       return {
         user_id:          uid,
         player_name:      player?.nickname || 'Unknown',
         selected_choice:  choiceIndex,
-        is_correct:       isCorrect,
-        is_first_correct: false,
+        // NOTE: is_correct is NOT sent - server/host calculates it
+        is_anomalous:     isAnomalous,
         reaction_time_ms: reactionMs,
+        signature:        signature,  // Cryptographic proof of answer integrity
         submitted_at:     Date.now(),
       }
     })
@@ -456,11 +514,10 @@ export default function PlayerGameView() {
             {/* Late-joiner notice */}
             {player?.joined_at_question_index > 0 && (
               <div className="bg-orange-500/10 border border-orange-500/30 rounded-xl px-3 py-2 flex items-center gap-2 text-xs text-orange-300">
-                <AlertCircle size={13} className="flex-shrink-0" />
+                <span className="flex-shrink-0"><AlertCircle size={13} /></span>
                 <span>دخلت من سؤال {player.joined_at_question_index + 1} — الأسئلة السابقة محسوبة صفر.</span>
               </div>
             )}
-
             {/* Mini leaderboard */}
             <MiniLeaderboard top5={top5} myId={myId} myRank={player?.rank} myScore={player?.score} myNickname={player?.nickname} />
 
@@ -546,10 +603,13 @@ export default function PlayerGameView() {
               )}
             </div>
 
-            {/* Choices with correct highlight */}
+            {/* Choices with correct highlight (revealed_answer shows only text, not index) */}
             <div className="grid grid-cols-2 gap-2 flex-shrink-0">
               {currentQ.choices.map((choice, idx) => {
-                const isCorrect = idx === currentQ.correct
+                // Don't expose correct answer during reveal — show based on revealed_answer text match
+                // This protects the game from cheating since correct_hash is not reversible
+                const revealedAnswer = room.revealed_answers?.[room.current_question_index]
+                const isCorrect = choice === revealedAnswer
                 const isPicked  = idx === selectedChoice
                 return (
                   <div key={idx} className={`flex items-center gap-3 border rounded-xl px-4 py-3 transition-all ${

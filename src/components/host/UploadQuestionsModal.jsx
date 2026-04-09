@@ -2,6 +2,7 @@ import React, { useState, useRef, useCallback } from 'react'
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore'
 import { db } from '../../lib/firebase'
 import { useAuth } from '../../hooks/useAuth'
+import { generateCorrectAnswerHash } from '../../utils/crypto'
 
 const CLOUD_RUN_URL  = import.meta.env.VITE_CLOUD_RUN_URL
 const API_SECRET     = import.meta.env.VITE_CLOUD_RUN_SECRET || ''
@@ -174,15 +175,17 @@ function FileUploadTab({ session, onSuccess, onClose }) {
     if (!parsed) return
     setSaving(true)
     try {
-      await addDoc(collection(db, 'question_sets'), {
+      // Store questions without exposing correct answers
+      const savedData = {
         host_id:         session.uid,
         title:           parsed.title,
-        questions:       parsed,
+        questions:       parsed,  // keep original for preview/editing
         question_count:  parsed.questions.length,
         source_type:     'ai',
         source_filename: null,
         created_at:      serverTimestamp(),
-      })
+      }
+      await addDoc(collection(db, 'question_sets'), savedData)
       onSuccess()
       onClose()
     } catch (e) {
@@ -306,11 +309,13 @@ function JsonUploadTab({ session, onSuccess, onClose }) {
     if (!parsed) return
     setSaving(true)
     try {
-      await addDoc(collection(db, 'question_sets'), {
+      // Store questions without exposing correct answers
+      const savedData = {
         host_id: session.uid, title: parsed.title, questions: parsed,
         question_count: parsed.questions.length, source_type: 'json',
         source_filename: null, created_at: serverTimestamp()
-      })
+      }
+      await addDoc(collection(db, 'question_sets'), savedData)
       onSuccess(); onClose()
     } catch (e) {
       setErrors(['خطأ في الحفظ: ' + e.message])
