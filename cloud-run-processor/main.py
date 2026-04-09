@@ -38,7 +38,7 @@ SAFETY_SETTINGS = [
 ]
 
 # ── FastAPI ────────────────────────────────────────────────────────────────────
-app = FastAPI(title="Dactoor Processor", version="1.2.0")
+app = FastAPI(title="Dactoor Processor", version="1.3.0")
 
 app.add_middleware(
     CORSMiddleware,

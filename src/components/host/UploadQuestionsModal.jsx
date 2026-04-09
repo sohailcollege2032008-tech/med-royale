@@ -174,7 +174,16 @@ function FileUploadTab({ session, onSuccess, onClose }) {
       if (!data.questions || !Array.isArray(data.questions) || data.questions.length === 0)
         throw new Error('الـ AI مرجعش أسئلة صالحة — تأكد إن الملف فيه MCQs')
 
-      setParsed(data)
+      // Normalize results to ensure types are consistent (integer for correct index)
+      const normalizedData = {
+        ...data,
+        questions: data.questions.map(q => ({
+          ...q,
+          correct: parseInt(q.correct, 10) || 0
+        }))
+      }
+
+      setParsed(normalizedData)
       setStatus('done')
       setStatusMsg('')
 
