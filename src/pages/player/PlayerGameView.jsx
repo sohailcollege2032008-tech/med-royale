@@ -356,7 +356,7 @@ export default function PlayerGameView() {
       const pad = (s, n) => String(s).padEnd(n)
       const lines = []
 
-      lines.push('=== Mashrou3 Dactoor — Game Log ===')
+      lines.push('=== Med Royale — Game Log ===')
       lines.push(`Room      : ${roomId}`)
       lines.push(`Date      : ${new Date().toLocaleString()}`)
       lines.push(`Questions : ${questions.length}`)

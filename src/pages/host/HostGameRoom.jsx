@@ -578,7 +578,7 @@ export default function HostGameRoom() {
       const lines = []
       const pad  = (s, n) => String(s).padEnd(n)
 
-      lines.push('=== Mashrou3 Dactoor — Game Log ===')
+      lines.push('=== Med Royale — Game Log ===')
       lines.push(`Room      : ${roomId}`)
       lines.push(`Date      : ${new Date().toLocaleString()}`)
       lines.push(`Players   : ${players.length}`)

@@ -45,9 +45,9 @@ export default function Landing() {
       >
         <div className="space-y-4">
           <h1 className="text-5xl font-bold text-white drop-shadow-[0_0_15px_rgba(255,255,255,0.3)]">
-            Mashrou3 <span className="text-primary">Dactoor</span>
+            Med <span className="text-primary">Royale</span>
           </h1>
-          <p className="text-xl text-gray-400 font-sans">Welcome to the Medical Battleground</p>
+          <p className="text-xl text-gray-400 font-sans">The Ultimate Medical Battleground</p>
         </div>
 
         {!initialized ? (
