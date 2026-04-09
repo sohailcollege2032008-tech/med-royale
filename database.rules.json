@@ -1,0 +1,23 @@
+{
+  "rules": {
+    "rooms": {
+      "$roomCode": {
+        ".read":  "auth != null",
+        ".write": "auth != null",
+        "answers": {
+          "$qIdx": {
+            "$userId": {
+              ".write": "auth != null && auth.uid == $userId && !data.exists()"
+            }
+          }
+        }
+      }
+    },
+    "host_rooms": {
+      "$hostId": {
+        ".read":  "auth != null && auth.uid == $hostId",
+        ".write": "auth != null && auth.uid == $hostId"
+      }
+    }
+  }
+}
